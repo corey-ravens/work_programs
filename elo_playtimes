@@ -77,92 +77,6 @@ IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
 		AND gs.season = 2019
 		AND gs.[week] = 1
 		--AND cl.code = 'BLT'
-		
-
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-Join the roster status data to the play level participation data.
-
-OUTPUT TABLES:
-#temp_statuses_with_plays
-
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_statuses_with_plays exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_statuses_with_plays') IS NOT NULL
-	DROP TABLE #temp_statuses_with_plays
-
-	SELECT gs.nfl_game_key
-		,gs.nfl_club_id
-		,gs.nfl_player_id
-		,pff_pp_id
-		,an.pff_play_id
-		,'DEF' AS play_type
-		,cl.code AS team
-		,cl.nfl_club_id AS nfl_club_id_play
-		,1 AS on_field
-	INTO #temp_statuses_with_plays
-	FROM #temp_players_gameweek_statuses gs
-	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
-		ON gs.nfl_game_key = an.gsis_game_key
-	INNER JOIN Analytics.dbo.stage_plays_player_defensive_alignment da
-		ON an.pff_play_id = da.pff_play_id
-		AND gs.nfl_player_id = da.nfl_player_id
-	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
-		ON da.team = co.pff_TEAM
-	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
-		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.team END = cl.code
-		AND cl.is_disabled = 0
-	INNER JOIN Analytics.dbo.stage_plays_play_type ty
-		ON an.pff_play_id = ty.pff_play_id
-	WHERE ty.is_qb_kneel = 0
-
-
-	INSERT INTO #temp_statuses_with_plays
-	SELECT gs.nfl_game_key
-		,gs.nfl_club_id
-		,gs.nfl_player_id
-		,pff_pp_id
-		,an.pff_play_id
-		,'OFF' AS play_type
-		,cl.code AS team
-		,cl.nfl_club_id AS nfl_club_id_play
-		,1 AS on_field
-	FROM #temp_players_gameweek_statuses gs
-	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
-		ON gs.nfl_game_key = an.gsis_game_key
-	INNER JOIN Analytics.dbo.stage_plays_player_offensive_alignment da
-		ON an.pff_play_id = da.pff_play_id
-	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
-		ON da.team = co.pff_TEAM
-	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
-		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.team END = cl.code
-		AND cl.is_disabled = 0
-		AND gs.nfl_player_id = da.nfl_player_id
-	INNER JOIN Analytics.dbo.stage_plays_play_type ty
-		ON an.pff_play_id = ty.pff_play_id
-	WHERE ty.is_qb_kneel = 0
-
-
-	INSERT INTO #temp_statuses_with_plays
-	SELECT gs.nfl_game_key
-		,gs.nfl_club_id
-		,gs.nfl_player_id
-		,pff_PPID AS pff_pp_id
-		,pff_PLAYID AS pff_play_id
-		,'ST' AS play_type
-		,cl.code AS team
-		,cl.nfl_club_id AS nfl_club_id_play
-		,1 AS on_field
-	FROM #temp_players_gameweek_statuses gs
-	INNER JOIN PFF.dbo.PFFSpecial da
-		ON gs.nfl_game_key = da.pff_GSISGAMEKEY
-		AND gs.nfl_player_id = da.pff_GSISPLAYERID
-	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
-		ON da.pff_TEAM = co.pff_TEAM
-	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
-		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.pff_TEAM END = cl.code
-		AND cl.is_disabled = 0
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -176,9 +90,9 @@ IF OBJECT_ID('tempdb..#temp_roster_vs_street') IS NOT NULL
 	DROP TABLE #temp_roster_vs_street
 
 	SELECT ro.nfl_game_key
-		,ro.nfl_player_id AS target_player_id
+		,ro.nfl_player_id AS target_nfl_player_id
 		,ro.status_roster_simple AS target_status
-		,st.nfl_player_id AS matchup_player_id
+		,st.nfl_player_id AS matchup_nfl_player_id
 		,st.status_roster_simple AS matchup_status
 		,1 AS matchup_weight
 	INTO #temp_roster_vs_street
@@ -192,7 +106,6 @@ IF OBJECT_ID('tempdb..#temp_roster_vs_street') IS NOT NULL
 	WHERE ro.is_on_53 = 1
 
 
-
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Give players who are active a "win" over players who are healthy scratches.
@@ -204,9 +117,9 @@ IF OBJECT_ID('tempdb..#temp_active_vs_healthy_scratch') IS NOT NULL
 	DROP TABLE #temp_active_vs_healthy_scratch
 
 	SELECT ac.nfl_game_key
-		,ac.nfl_player_id AS target_player_id
+		,ac.nfl_player_id AS target_nfl_player_id
 		,ac.status_roster_simple AS target_status
-		,hs.nfl_player_id AS matchup_player_id
+		,hs.nfl_player_id AS matchup_nfl_player_id
 		,hs.status_roster_simple AS matchup_status
 		,1 AS matchup_weight
 	INTO #temp_active_vs_healthy_scratch
@@ -221,7 +134,98 @@ IF OBJECT_ID('tempdb..#temp_active_vs_healthy_scratch') IS NOT NULL
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+Join the roster status data to the play level participation data.
+
+OUTPUT TABLES:
+#temp_player_plays
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_plays exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
+	DROP TABLE #temp_player_plays
+
+	SELECT an.gsis_game_key AS nfl_game_key
+		,pff_pp_id
+		,an.pff_play_id
+		,da.nfl_player_id
+		,'DEF' AS play_type
+		,cl.code AS team
+		,cl.nfl_club_id AS nfl_club_id_play
+	INTO #temp_player_plays
+	FROM Analytics.dbo.stage_plays_play_ancillary an
+	INNER JOIN Analytics.dbo.stage_plays_player_defensive_alignment da
+		ON an.pff_play_id = da.pff_play_id
+	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
+		ON da.team = co.pff_TEAM
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
+		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.team END = cl.code
+		AND cl.is_disabled = 0
+	INNER JOIN Analytics.dbo.stage_plays_play_type ty
+		ON an.pff_play_id = ty.pff_play_id
+	INNER JOIN AnalyticsWork.dbo.rd_playfact aw
+		ON an.gsis_game_key = aw.GameKey
+		AND an.gsis_play_id = aw.PlayID
+	WHERE ty.is_qb_kneel = 0
+		AND an.gsis_game_key IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
+		AND WPstart BETWEEN 0.1 AND 0.99
+
+
+	INSERT INTO #temp_player_plays
+	SELECT an.gsis_game_key AS nfl_game_key
+		,pff_pp_id
+		,an.pff_play_id
+		,da.nfl_player_id
+		,'OFF' AS play_type
+		,cl.code AS team
+		,cl.nfl_club_id AS nfl_club_id_play
+	FROM Analytics.dbo.stage_plays_play_ancillary an
+	INNER JOIN Analytics.dbo.stage_plays_player_offensive_alignment da
+		ON an.pff_play_id = da.pff_play_id
+	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
+		ON da.team = co.pff_TEAM
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
+		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.team END = cl.code
+		AND cl.is_disabled = 0
+	INNER JOIN Analytics.dbo.stage_plays_play_type ty
+		ON an.pff_play_id = ty.pff_play_id
+	INNER JOIN AnalyticsWork.dbo.rd_playfact aw
+		ON an.gsis_game_key = aw.GameKey
+		AND an.gsis_play_id = aw.PlayID
+	WHERE ty.is_qb_kneel = 0
+		AND an.gsis_game_key IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
+		AND WPstart BETWEEN 0.1 AND 0.99
+
+/*
+	INSERT INTO #temp_player_plays
+	SELECT pff_GSISGAMEKEY AS nfl_game_key
+		,pff_PPID AS pff_pp_id
+		,pff_PLAYID AS pff_play_id
+		,pff_GSISPLAYERID AS nfl_player_id
+		,'ST' AS play_type
+		,cl.code AS team
+		,cl.nfl_club_id AS nfl_club_id_play
+	FROM PFF.dbo.PFFSpecial da
+	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
+		ON da.pff_TEAM = co.pff_TEAM
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
+		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.pff_TEAM END = cl.code
+		AND cl.is_disabled = 0
+	INNER JOIN AnalyticsWork.dbo.rd_playfact aw
+		ON da.pff_GSISGAMEKEY = aw.GameKey
+		AND da.pff_GSISPLAYID = aw.PlayID
+	WHERE pff_GSISGAMEKEY IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
+		AND WPstart BETWEEN 0.1 AND 0.99
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 Give players who are in on a play a win over the players who are not in on a play.
+
+	-Find the team play counts for each game.
+	-Create a table of unique play ids each game.
+	-Find the players who are active but not in on the play
+	-Join the off field players to the on field players so you have a 'matchup' for every play.
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -234,10 +238,40 @@ IF OBJECT_ID('tempdb..#temp_play_counts') IS NOT NULL
 		,play_type
 		,COUNT(DISTINCT pff_play_id) AS play_count
 	INTO #temp_play_counts
-	FROM #temp_statuses_with_plays ta
+	FROM #temp_player_plays ta
 	GROUP BY nfl_game_key
 		,nfl_club_id_play
 		,play_type
+
+
+-- Check if #temp_play_ids exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_ids') IS NOT NULL
+	DROP TABLE #temp_play_ids
+
+	SELECT DISTINCT nfl_game_key
+		,pff_play_id
+		,nfl_club_id_play
+		,play_type
+	INTO #temp_play_ids
+	FROM #temp_player_plays
+
+
+-- Check if #temp_off_field exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_off_field') IS NOT NULL
+	DROP TABLE #temp_off_field
+
+	SELECT pff_play_id
+		,nfl_club_id_play
+		,gs.nfl_player_id AS nfl_player_id
+	INTO #temp_off_field
+	FROM #temp_players_gameweek_statuses gs
+	INNER JOIN #temp_play_ids pid
+		ON gs.nfl_game_key = pid.nfl_game_key
+		AND gs.nfl_club_id = pid.nfl_club_id_play
+		AND gs.position_unit = pid.play_type
+	WHERE gs.is_active = 1
+		AND gs.nfl_player_id not in (SELECT DISTINCT nfl_player_id FROM #temp_player_plays pp WHERE pid.pff_play_id = pp.pff_play_id)
+	ORDER BY pff_play_id
 
 
 -- Check if #temp_on_vs_off_field exists, if it does drop it
@@ -245,27 +279,146 @@ IF OBJECT_ID('tempdb..#temp_on_vs_off_field') IS NOT NULL
 	DROP TABLE #temp_on_vs_off_field
 
 	SELECT ta.nfl_game_key
-		,ta.nfl_player_id AS target_player_id
+		,ta.nfl_player_id AS target_nfl_player_id
 		,ta.pff_play_id
 		,ta.pff_pp_id
-		,ta.on_field
-		,mu.nfl_player_id AS matchup_player_id
-		,mu.status_roster_simple
+		,mu.nfl_player_id AS matchup_nfl_player_id
 		,CAST(1 AS FLOAT)/ISNULL(pc.play_count,0) AS matchup_weight
 		,pc.play_count
 	INTO #temp_on_vs_off_field
-	FROM #temp_statuses_with_plays ta
-	INNER JOIN #temp_players_gameweek_statuses mu
-		ON ta.nfl_game_key = mu.nfl_game_key
-		AND ta.nfl_club_id_play = mu.nfl_club_id
-		AND ta.nfl_player_id <> mu.nfl_player_id
-		AND ta.play_type = mu.position_unit
-		AND mu.nfl_player_id NOT IN (SELECT DISTINCT nfl_player_id FROM #temp_statuses_with_plays ta2 WHERE ta.pff_play_id = ta2.pff_play_id)
-		AND mu.is_active = 1
+	FROM #temp_player_plays ta
+	INNER JOIN #temp_off_field mu
+		ON ta.pff_play_id = mu.pff_play_id
+		AND ta.nfl_club_id_play = mu.nfl_club_id_play
 	INNER JOIN #temp_play_counts pc
 		ON ta.nfl_game_key = pc.nfl_game_key
 		AND ta.nfl_club_id_play = pc.nfl_club_id_play
 		AND ta.play_type = pc.play_type
 
 
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the full matchup table with all the layers.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_elo_matchups exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_elo_matchups') IS NOT NULL
+	DROP TABLE #temp_elo_matchups
+
+	SELECT target_nfl_player_id
+		,matchup_nfl_player_id
+		,matchup_weight
+		,1 AS target_result
+		,0 AS matchup_result
+		,'playtime' AS matchup_type
+		,35 AS matchup_elo_k_value --ELS set this value, read ELO online explanation about what K value is best
+	INTO #temp_elo_matchups
+	FROM #temp_on_vs_off_field		
+
+
+	INSERT INTO #temp_elo_matchups
+	SELECT target_nfl_player_id
+		,matchup_nfl_player_id
+		,matchup_weight
+		,1 AS target_result
+		,0 AS matchup_result
+		,'active' AS matchup_type
+		,5 AS matchup_elo_k_value --ELS set this value, read ELO online explanation about what K value is best
+	FROM #temp_active_vs_healthy_scratch
+
+
+	INSERT INTO #temp_elo_matchups
+	SELECT target_nfl_player_id
+		,matchup_nfl_player_id
+		,matchup_weight
+		,1 AS target_result
+		,0 AS matchup_result
+		,'street' AS matchup_type
+		,1 AS matchup_elo_k_value --ELS set this value, read ELO online explanation about what K value is best
+	FROM #temp_roster_vs_street
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join in previous elo ratings.
+
+take up to the previous 3 ratings (that's how ELS did it...why?) maye just go with whateger is his most recent?
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_recent_ratings exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_recent_ratings') IS NOT NULL
+	DROP TABLE #temp_recent_ratings
+		
+	SELECT nfl_player_id
+		,MAX(elo_rating) AS rating_previous
+	INTO #temp_recent_ratings
+	FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee
+	WHERE ee.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee1 WHERE ee.nfl_player_id = ee1.nfl_player_id)
+		AND ee.[week] = (SELECT MAX([week]) FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee2 WHERE ee.nfl_player_id = ee2.nfl_player_id 
+							AND ee2.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee3 WHERE ee2.nfl_player_id = ee3.nfl_player_id))
+	GROUP BY nfl_player_id
+
+/*
+
+-- Check if #temp_recent_ratings exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_recent_ratings') IS NOT NULL
+	DROP TABLE #temp_recent_ratings
+		
+	SELECT nfl_player_id
+		,rating_group_key
+		,rating AS previous_rating
+		,RANK() OVER (PARTITION BY nfl_player_id ORDER BY season DESC, [week] DESC, rating DESC) AS rating_order
+	INTO #temp_recent_ratings
+	FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY
+
+*/
+
+-- Check if #temp_elo_matchups_with_ratings exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_elo_matchups_with_ratings') IS NOT NULL
+	DROP TABLE #temp_elo_matchups_with_ratings
+		
+	SELECT el.*
+		,COALESCE(ta.rating_previous,1400) AS target_rating_previous
+		,COALESCE(mu.rating_previous,1400) AS matchup_rating_previous
+		,CAST(POWER(10,COALESCE(ta.rating_previous,1400)/400) AS FLOAT) / NULLIF((POWER(10,COALESCE(ta.rating_previous,1400)/400) + POWER(10,COALESCE(mu.rating_previous,1400)/400)),0) AS target_expected_score
+		,CAST(POWER(10,COALESCE(mu.rating_previous,1400)/400) AS FLOAT) / NULLIF((POWER(10,COALESCE(ta.rating_previous,1400)/400) + POWER(10,COALESCE(mu.rating_previous,1400)/400)),0) AS matchup_expected_score
+	INTO #temp_elo_matchups_with_ratings
+	FROM #temp_elo_matchups el
+	LEFT JOIN #temp_recent_ratings ta
+		ON el.target_nfl_player_id = ta.nfl_player_id
+		--AND ta.rating_order = 1 --if you switch to finding recent by order and not subqueries
+	LEFT JOIN #temp_recent_ratings mu
+		ON el.matchup_nfl_player_id = mu.nfl_player_id
+		--AND mu.rating_order = 1 --if you switch to finding recent by order and not subqueries
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up the player elo ratings.
+
+YOu keep them together up until this point because you need them in the same row to get the "expected score" for each player in the contest.
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_AA exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_AA') IS NOT NULL
+	DROP TABLE #temp_AA
+		
+	SELECT target_nfl_player_id AS nfl_player_id
+		,SUM((1 - target_expected_score) * matchup_weight * matchup_elo_k_value) AS elo_score
+	INTO #temp_AA
+	FROM #temp_elo_matchups_with_ratings
+	WHERE target_nfl_player_id = 33234
+	GROUP BY target_nfl_player_id
+
+
+	INSERT INTO #temp_AA
+	SELECT matchup_nfl_player_id AS nfl_player_id
+		,SUM((0 - target_expected_score) * matchup_weight * matchup_elo_k_value) AS elo_score --the way the joins are setup, matchup_player is the "loser"
+	FROM #temp_elo_matchups_with_ratings
+	WHERE matchup_nfl_player_id = 33234
+	GROUP BY matchup_nfl_player_id
 
