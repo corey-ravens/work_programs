@@ -7,9 +7,8 @@
 
 
 
-
 DECLARE @iSeason INT
-SELECT @iSeason = 2017
+SELECT @iSeason = 2021
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -33,7 +32,7 @@ IF OBJECT_ID('tempdb..#temp_roster_players') IS NOT NULL
 	FROM Analytics.dbo.analysis_players_gameweek_status gs
 	WHERE season >= 2012
 		AND UPPER(season_type) = 'REG'
-		AND status_roster_simple IN ('ACTIVE','INACTIVE','INJURED','PUP')
+		AND status_roster_simple IN ('ACTIVE','INACTIVE','INJURED','PUP','COVID')
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -90,8 +89,7 @@ IF OBJECT_ID('tempdb..#temp_ir_end_of_season') IS NOT NULL
 	INTO #temp_ir_end_of_season
 	FROM Analytics.dbo.analysis_players_gameweek_status
 	WHERE season_type = 'REG'
-		AND season >= 2011
-		AND [week] = 17
+		AND ((season BETWEEN 2011 AND 2020 AND [week] = 17) OR (season >= 2021 AND [week] = 18))
 		AND status_roster_simple = 'INJURED'
 
 
@@ -269,7 +267,7 @@ IF OBJECT_ID('tempdb..#temp_weeks_missed') IS NOT NULL
 	WHERE season_type = 'REG'
 		AND gw.season >= 2012
 		--AND [week] = 1
-		AND ((status_roster_simple IN ('INJURED','PUP') AND nfl_game_key IS NOT NULL) OR (status_roster_simple IN ('INACTIVE') AND injury_status_week IS NOT NULL))
+		AND ((status_roster_simple IN ('INJURED','PUP','COVID') AND nfl_game_key IS NOT NULL) OR (status_roster_simple IN ('INACTIVE') AND injury_status_week IS NOT NULL))
 		AND COALESCE(UPPER(injury_text_week),'XXX') NOT LIKE '%ILLN%'
 		AND COALESCE(UPPER(injury_text_week),'XXX') NOT LIKE '%NOT%'
 		AND COALESCE(UPPER(injury_text_week),'XXX') NOT LIKE '%NON%'
@@ -377,13 +375,30 @@ OUTPUT TABLES:
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
+-- Check if#temp_market_values exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_market_values') IS NOT NULL
+	DROP TABLE #temp_market_values
+
+select distinct *
+into #temp_market_values
+from AnalyticsSandbox.dbo.market_values_rescaled_2021_week_13
+
+
+
+	select distinct season
+		,league_salary_cap
+		into #temp_caps
+	from BaneProductionAnalytics.dbo.league_salary_cap_summaries
+
 -- Check if #temp_injuries_cap exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_injuries_cap') IS NOT NULL
 	DROP TABLE #temp_injuries_cap
 
 	SELECT wm.*
-		,cr.CapAmt / 17 AS cap_amount
-	INTO #temp_injuries_cap
+		,cr.CapAmt / case when wm.season < 2021 then 17 else 18 end AS cap_amount
+		,COALESCE(co.true_apy_percent_of_cap,cr.CapAmt / nullif(ca.league_salary_cap,0)) / case when wm.season < 2021 then 17 else 18 end AS apy_amount
+		,COALESCE(mv.market_value_scaled_to_modern_years,mvo.market_value_scaled_to_modern_years,co.true_apy_percent_of_cap,cr.CapAmt/nullif(league_salary_cap,0)) / case when wm.season < 2021 then 17 else 18 end AS mkt_value_amound
+	--INTO #temp_injuries_cap
 	FROM #temp_weeks_missed wm
 	LEFT JOIN ClubDB.dbo.CapRollup cr
 		ON wm.nfl_player_id = cr.PlayerID
@@ -391,6 +406,22 @@ IF OBJECT_ID('tempdb..#temp_injuries_cap') IS NOT NULL
 		AND wm.season = cr.season
 		AND wm.game_datetime >= cr.FromDate
 		AND wm.game_datetime <= COALESCE(cr.ToDate,'12/31/2999')
+	LEFT JOIN Analytics.dbo.analysis_players_contracts co
+		ON wm.nfl_player_id = co.nfl_player_id
+		AND wm.nfl_club_id = co.nfl_club_id
+		AND wm.game_datetime >= co.signing_date
+		AND wm.game_datetime < COALESCE(co.signing_date_next_contract,'12/31/2999')
+	LEFT JOIN #temp_market_values mv
+		ON wm.nfl_player_id = mv.nfl_player_id
+		AND wm.season = mv.season
+	LEFT JOIN #temp_market_values mvo
+		ON wm.nfl_player_id = mvo.nfl_player_id
+		AND wm.season = mvo.season + 1	
+	LEFT JOIN #temp_caps ca
+		on wm.season = ca.season
+
+
+
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
