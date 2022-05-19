@@ -8,7 +8,7 @@ v3 adds the weighted average snap grade
 	player had to play 'behind'.
 
 v4 switched to a count of 6.3 and 6.0 and above players on the team at that position, EXCLUDING the given player.
-
+v5 switches to doing the modeling at the PLAY level instead of the season level.
 
 should you include games in the play time expectation calculation, or just do weighted average play time by team?
 the latter is so guys like adeboyejo who play one game don't have the same effect as guys who play in 16 games.
@@ -200,205 +200,244 @@ IF OBJECT_ID('tempdb..#temp_player_list') IS NOT NULL
 		AND pl.nfl_id IS NOT NULL
 
 
+
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create a Play Time Table
+Create a table of all snaps since 2012.
+
+OUTPUT TABLES:
+#temp_all_snaps
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_play_times exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_play_times') IS NOT NULL
-	DROP TABLE #temp_play_times
+-- Check if #temp_all_snaps exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
+	DROP TABLE #temp_all_snaps
 
-	SELECT PlayerID AS nfl_player_id
-		,pt.season
-		,pt.ClubID AS nfl_club_id
-		,SUM(CASE WHEN status_roster_simple = 'ACTIVE' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NULL) THEN 1 ELSE 0 END) AS games
-		,SUM(CASE WHEN (status_roster_simple = 'ACTIVE' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NULL)) THEN CAST(OffensivePlays AS FLOAT) ELSE NULL END) / NULLIF(SUM(CASE WHEN (status_roster_simple = 'ACTIVE' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NULL)) THEN CAST(TeamOffensivePlays AS FLOAT) ELSE NULL END),0) AS play_time_offense
-		,SUM(CASE WHEN (status_roster_simple = 'ACTIVE' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NULL)) THEN CAST(DefensivePlays AS FLOAT) ELSE NULL END) / NULLIF(SUM(CASE WHEN (status_roster_simple = 'ACTIVE' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NULL)) THEN CAST(TeamDefensivePlays AS FLOAT) ELSE NULL END),0) AS play_time_defense
-		,SUM(CASE WHEN (status_roster_simple = 'ACTIVE' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NULL)) THEN CAST(SpecialTeamPlays AS FLOAT) ELSE NULL END) / NULLIF(SUM(CASE WHEN (status_roster_simple = 'ACTIVE' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NULL)) THEN CAST(TeamSpecialTeamPlays AS FLOAT) ELSE NULL END),0) AS play_time_special_teams
-	INTO #temp_play_times
-	FROM ClubDB.dbo.PlayTime pt
-	INNER JOIN [BaneProductionAnalytics].dbo.pro_games pg
-		ON pt.GameKey = pg.nfl_game_key
-	INNER JOIN Analytics.dbo.analysis_players_gameweek_status gs
-		ON pt.PlayerID = gs.nfl_player_id
-		AND pt.GameKey = gs.nfl_game_key
-	WHERE UPPER(pg.season_type) = 'REG'
-	GROUP BY PlayerID	  
-		,pt.season
-		,pt.ClubID
+	SELECT sp.pff_GSISPLAYERID AS nfl_player_id
+		,sp.pff_PLAYID AS pff_play_id
+		,sp.pff_GAMEID AS pff_game_id
+		,an.season
+		,[week]
+		,pff_TEAM AS team
+		,'special teams' AS snap_type
+		,CASE WHEN pff_POSITION = 'P' THEN 'PT  '	
+			WHEN pff_POSITION = 'H' THEN 'HO  ' 
+			ELSE CONCAT(LEFT(pff_position,2),'  ') 
+		END AS position_play
+		,'SPTEAM' AS position_pff_game
+		,WPstart AS win_pct_start
+		,CASE WHEN LTRIM(RTRIM(UPPER(sp.pff_INJURED))) = 'Y' THEN 1 ELSE 0 END AS injured_on_play
+		,co.game_clock_counting_up_pff
+	INTO #temp_all_snaps
+	FROM PFF.dbo.PFFSpecial sp
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON sp.pff_PLAYID = an.pff_play_id
+	INNER JOIN Analytics.dbo.stage_plays_play_context co
+		ON sp.pff_PLAYID = co.pff_play_id
+	INNER JOIN [AnalyticsWork].[dbo].[rd_playfact] pf
+		ON sp.pff_GSISPLAYID = pf.PlayID
+		AND sp.pff_GSISGAMEKEY = pf.GameKey
+	WHERE an.season >= 2012
+		AND an.season_type = 'REG'
+
+
+	INSERT INTO #temp_all_snaps
+	SELECT nfl_player_id
+		,da.pff_play_id
+		,pff_game_id
+		,an.season
+		,[week]
+		,team
+		,'defense' AS snap_type	
+		,position_blt AS position_play
+		,position_pff_game
+		,WPstart AS win_pct_start
+		,injured_on_play_pff
+		,co.game_clock_counting_up_pff
+	FROM Analytics.dbo.stage_plays_player_defensive_alignment da
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON da.pff_play_id = an.pff_play_id
+	INNER JOIN [AnalyticsWork].[dbo].[rd_playfact] pf
+		ON an.gsis_play_id = pf.PlayID
+		AND an.gsis_game_key = pf.GameKey
+	INNER JOIN Analytics.dbo.stage_plays_play_context co
+		ON da.pff_play_id = co.pff_play_id
+	WHERE an.season >= 2012
+		AND an.season_type = 'REG'
+
+
+	INSERT INTO #temp_all_snaps
+	SELECT nfl_player_id
+		,oa.pff_play_id
+		,pff_game_id
+		,an.season
+		,[week]
+		,team
+		,'offense' AS snap_type
+		,position_blt AS position_play
+		,position_pff_game
+		,WPstart AS win_pct_start
+		,injured_on_play_pff
+		,co.game_clock_counting_up_pff
+	FROM Analytics.dbo.stage_plays_player_offensive_alignment oa
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON oa.pff_play_id = an.pff_play_id
+	INNER JOIN [AnalyticsWork].[dbo].[rd_playfact] pf
+		ON an.gsis_play_id = pf.PlayID
+		AND an.gsis_game_key = pf.GameKey
+	INNER JOIN Analytics.dbo.stage_plays_play_context co
+		ON oa.pff_play_id = co.pff_play_id
+	WHERE an.season >= 2012
+		AND an.season_type = 'REG'
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Join the snaps to the player information
+You need a table that has a row for every play in a game for every player who was in that game.
+
+First create a table with games and plays. Then create a table with games and players.
+Join them and you should have a row for every player for each play in a game he played in (whether
+he was in on the play or not).
+
+OUTPUT TABLES:
+#temp_games_plays
+#temp_games_players
+#temp_games_plays_players
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_games_plays exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_games_plays') IS NOT NULL
+	DROP TABLE #temp_games_plays
+
+	SELECT DISTINCT pff_game_id
+		,pff_play_id
+		,game_clock_counting_up_pff
+	INTO #temp_games_plays
+	FROM #temp_all_snaps
+
+-- Check if #temp_games_players exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_games_players') IS NOT NULL
+	DROP TABLE #temp_games_players
+
+	SELECT DISTINCT pff_game_id
+		,nfl_player_id
+	INTO #temp_games_players
+	FROM #temp_all_snaps
+
+-- Check if #temp_games_plays_players exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_games_plays_players') IS NOT NULL
+	DROP TABLE #temp_games_plays_players
+
+	SELECT py.pff_game_id
+		,py.pff_play_id
+		,py.game_clock_counting_up_pff
+		,pl.nfl_player_id
+	INTO #temp_games_plays_players
+	FROM #temp_games_plays py
+	INNER JOIN #temp_games_players pl
+		ON py.pff_game_id = pl.pff_game_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Now join the all snaps data to the games-plays-player table so you can note if
+a player was in on a play or hurt on a play.  This is the table you can use to create
+the currently_injured variable.
+
+To do that, flag when a player gets an injury and then loop through to see if he 
+came back in.  If not, then he is flagged as injured the rest of the game, if so
+then he is flagged injured until he comes back in.
 
 OUTPUT TABLE:
-#temp_player_play_time
+#temp_games_plays_players_injuries
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_player_play_time exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_player_play_time') IS NOT NULL
-	DROP TABLE #temp_player_play_time
+-- Check if #temp_games_plays_players_injuries exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_games_plays_players_injuries') IS NOT NULL
+	DROP TABLE #temp_games_plays_players_injuries
 
-	SELECT pl.nfl_player_id
-		,player
-		,CASE WHEN position IN ('SS','FS') THEN 'DS'
-			WHEN position IN ('DP','RUSH','SAM') THEN 'OB'
-			WHEN position IN ('WO','WR') THEN 'WR'
-			WHEN position IN ('OH','RB') THEN 'RB'
-			WHEN position IN ('OG','OC') THEN 'OG'
-			ELSE position
-		END AS position
-		,nfl_entry_year
-		,pt.season AS season
-		,1 AS seasons_since_draft
-		,CASE WHEN draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
-		,ec.code AS draft_team
-		,ec.nfl_club_id
-		,on_53
-		--,COALESCE(CASE WHEN pl.nfl_entry_club_id = pt.nfl_club_id THEN 1 ELSE 0 END,0) AS same_team
-		,CASE WHEN pt.nfl_player_id IS NULL THEN 0
-			WHEN side_of_ball = 'offense' THEN play_time_offense
-			WHEN side_of_ball = 'defense' THEN play_time_defense
-			ELSE NULL
-		END AS play_time
-		,games
-	INTO #temp_player_play_time
-	FROM #temp_player_list pl
-	LEFT JOIN #temp_play_times pt
-		ON pl.nfl_player_id = pt.nfl_player_id
-		AND pl.nfl_entry_year = pt.season
-		AND pl.nfl_entry_club_id_not_bane = pt.nfl_club_id
-	LEFT JOIN BaneProductionAnalytics.dbo.clubs ec
-		ON pl.nfl_entry_club_id_not_bane = ec.nfl_club_id
-		AND ec.is_disabled = 0
+	SELECT gpp.pff_game_id
+		,gpp.pff_play_id
+		,gpp.game_clock_counting_up_pff
+		,gpp.nfl_player_id
+		,season
+		,asn.team
+		,asn.position_play
+		,asn.position_pff_game
+		,CASE WHEN asn.nfl_player_id IS NOT NULL THEN 1 ELSE 0 END AS active_play
+		,CASE WHEN asn.injured_on_play = 1 THEN 1 ELSE 0 END AS injured_on_play
+	INTO #temp_games_plays_players_injuries
+	FROM #temp_games_plays_players gpp
+	LEFT JOIN #temp_all_snaps asn
+		ON gpp.pff_game_id = asn.pff_game_id
+		AND gpp.pff_play_id = asn.pff_play_id
+		AND gpp.nfl_player_id = asn.nfl_player_id
 
-
-	INSERT INTO #temp_player_play_time
-	SELECT pl.nfl_player_id
-		,player
-		,CASE WHEN position IN ('SS','FS') THEN 'DS'
-			WHEN position IN ('DP','RUSH','SAM') THEN 'OB'
-			WHEN position IN ('WO','WR') THEN 'WR'
-			WHEN position IN ('OH','RB') THEN 'RB'
-			WHEN position IN ('OG','OC') THEN 'OG'
-			ELSE position
-		END AS position
-		,nfl_entry_year
-		,pt.season AS season
-		,2 AS seasons_since_draft
-		,CASE WHEN draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
-		,ec.code AS draft_team
-		,ec.nfl_club_id
-		,on_53
-		--,COALESCE(CASE WHEN pl.nfl_entry_club_id = pt.nfl_club_id THEN 1 ELSE 0 END,0) AS same_team
-		,CASE WHEN pt.nfl_player_id IS NULL THEN 0
-			WHEN side_of_ball = 'offense' THEN play_time_offense
-			WHEN side_of_ball = 'defense' THEN play_time_defense
-			ELSE NULL
-		END AS play_time
-		,games
-	FROM #temp_player_list pl
-	LEFT JOIN #temp_play_times pt
-		ON pl.nfl_player_id = pt.nfl_player_id
-		AND pl.nfl_entry_year + 1 = pt.season
-		AND pl.nfl_entry_club_id_not_bane = pt.nfl_club_id
-	LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
-		ON pt.nfl_club_id = pc.nfl_club_id
-		AND pc.is_disabled = 0
-	LEFT JOIN BaneProductionAnalytics.dbo.clubs ec
-		ON pl.nfl_entry_club_id_not_bane = ec.nfl_club_id
-		AND ec.is_disabled = 0	
-	WHERE pl.nfl_entry_year < 2017
-
-
-	INSERT INTO #temp_player_play_time
-	SELECT pl.nfl_player_id
-		,player
-		,CASE WHEN position IN ('SS','FS') THEN 'DS'
-			WHEN position IN ('DP','RUSH','SAM') THEN 'OB'
-			WHEN position IN ('WO','WR') THEN 'WR'
-			WHEN position IN ('OH','RB') THEN 'RB'
-			WHEN position IN ('OG','OC') THEN 'OG'
-			ELSE position
-		END AS position
-		,nfl_entry_year
-		,pt.season AS season
-		,3 AS seasons_since_draft
-		,CASE WHEN draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
-		,ec.code AS draft_team
-		,ec.nfl_club_id
-		,on_53
-		--,COALESCE(CASE WHEN pl.nfl_entry_club_id = pt.nfl_club_id THEN 1 ELSE 0 END,0) AS same_team
-		,CASE WHEN pt.nfl_player_id IS NULL THEN 0
-			WHEN side_of_ball = 'offense' THEN play_time_offense
-			WHEN side_of_ball = 'defense' THEN play_time_defense
-			ELSE NULL
-		END AS play_time
-		,games
-	FROM #temp_player_list pl
-	LEFT JOIN #temp_play_times pt
-		ON pl.nfl_player_id = pt.nfl_player_id
-		AND pl.nfl_entry_year + 2 = pt.season
-		AND pl.nfl_entry_club_id_not_bane = pt.nfl_club_id
-	LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
-		ON pt.nfl_club_id = pc.nfl_club_id
-		AND pc.is_disabled = 0
-	LEFT JOIN BaneProductionAnalytics.dbo.clubs ec
-		ON pl.nfl_entry_club_id_not_bane = ec.nfl_club_id
-		AND ec.is_disabled = 0	
-	WHERE pl.nfl_entry_year < 2016
+/*
+	SELECT *
+	--INTO Analytics.dbo.work_r_input_injury_loop
+	FROM #temp_all_snaps
+	--WHERE nfl_player_id = 
+		--AND pff_game_id = 
+	ORDER BY nfl_player_id, pff_game_id, game_clock_counting_up_pff
+*/
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Count up the number of players at 6.0 and 6.3 and above by team and position, excluding the
+RUN THE R PROGRAM
+X:\R\pro_scouting\injury_loop
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+After running the r program to get available/not available for injury, join the
+grades so you can count up the grades of WHO IS AVAILABLE each play excluding the target player.
+
+OUTPUT TABLE:
+#temp_currently_injured_with_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_currently_injured_with_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_currently_injured_with_grades') IS NOT NULL
+	DROP TABLE #temp_currently_injured_with_grades
+
+	SELECT ci.*
+		,season
+		,team
+		,position_play
+		,position_pff_game
+	INTO #temp_currently_injured_with_grades
+	FROM Analytics.dbo.r_output_play_player_currently_injured ci
+	INNER JOIN #temp_games_plays_players_injuries gp
+		ON ci.nfl_player_id = gp.nfl_player_id
+		AND ci.pff_game_id = gp.pff_game_id
+		AND ci.pff_play_id = gp.pff_play_id
+	
+
+
+
+	Analytics.dbo.analysis_players_pro_grades	pgc
+		ON ci.nfl_player_id = pgc.nfl_player_id
+		AND ci.season = pgc.report_season
+		AND pgc.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_grades)
+		
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Count up the number of players at 6.0 and 6.3 and above by team and position for each play, excluding the
 target player.
 
-First create a table noting all the teams a player played at least one game for. Then join those
-teams to the grades table.
-
 OUTPUT TABLE:
-#temp_player_teams
-#temp_grades_with_team
 #temp_team_position_grade_counts
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
--- Check if #temp_player_teams exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_player_teams') IS NOT NULL
-	DROP TABLE #temp_player_teams
-
-	SELECT nfl_player_id
-		,season
-		,club_id AS nfl_club_id
-		,COUNT(nfl_game_key) AS active_games
-	INTO #temp_player_teams
-	FROM Analytics.dbo.analysis_players_gameweek_status gs
-	WHERE season_type = 'REG'
-		AND status_roster_simple = 'ACTIVE'
-		AND season >= 2012
-	GROUP BY nfl_player_id
-		,season
-		,club_id
-
-
--- Check if #temp_grades_with_team exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_grades_with_team') IS NOT NULL
-	DROP TABLE #temp_grades_with_team
-
-	SELECT pg.*
-		,te.nfl_club_id
-	INTO #temp_grades_with_team
-	FROM Analytics.dbo.analysis_players_pro_grades pg
-	INNER JOIN #temp_player_teams te
-		ON pg.nfl_player_id = te.nfl_player_id
-		AND pg.report_season = te.season
-	WHERE pg.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_grades)
-
 
 -- Check if #temp_team_position_grade_counts exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_team_position_grade_counts') IS NOT NULL
