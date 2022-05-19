@@ -1,0 +1,104 @@
+
+
+
+
+
+
+	SELECT nfl_player_id
+		,gs.season
+		,season_type
+		,[week]
+		,CASE WHEN nfl_game_key IS NULL THEN 999999 ELSE nfl_game_key END AS nfl_game_key
+		,CASE WHEN status_roster_simple = 'ACTIVEEXEMPT' THEN 'SUSPENDED'
+			WHEN status_roster_simple = 'WAIVEINJ' THEN 'WAIVERS'
+			ELSE status_roster_simple END AS status_roster_simple
+		,CASE WHEN status_roster_simple	IN ('FREEAGENT','PRACTICESQUAD','WAIVERS','WAIVEINJ') THEN 'STREET'
+			WHEN status_roster_simple IN ('EXEMPT','RESERVE','INJURED','PUP','SUSPENDED','ACTIVEEXEMPT') THEN 'INJSUSP'
+			WHEN status_roster_simple IN ('RETIRED') THEN 'RETIRED'
+			WHEN status_roster_simple IN ('ACTIVE','INACTIVE') THEN 'ON53'
+			ELSE NULL
+		END AS status_group
+		,CASE WHEN status_roster_simple	IN ('FREEAGENT') THEN 'FA'
+			WHEN status_roster_simple IN ('PRACTICESQUAD') THEN 'PS'
+			WHEN status_roster_simple IN ('WAIVERS','WAIVEINJ') THEN 'WV'
+			WHEN status_roster_simple IN ('EXEMPT') THEN 'EXE'
+			WHEN status_roster_simple IN ('RESERVE') THEN 'RES'
+			WHEN status_roster_simple IN ('INJURED') THEN 'INJ'
+			WHEN status_roster_simple IN ('PUP') THEN 'PUP'
+			WHEN status_roster_simple IN ('SUSPENDED','ACTIVEEXEMPT') THEN 'SUS'
+			WHEN status_roster_simple IN ('RETIRED') THEN 'RET'
+			WHEN status_roster_simple IN ('ACTIVE') THEN 'ACT'
+			WHEN status_roster_simple IN ('INACTIVE') THEN 'INA'
+		ELSE NULL
+		END AS status_code
+		,CASE WHEN club_id IS NULL THEN 'FA'
+			ELSE cl.code 
+		END AS club_code
+		,CASE WHEN status_roster_simple	IN ('FREEAGENT') THEN 'FA'
+			WHEN status_roster_simple IN ('PRACTICESQUAD') THEN CONCAT(cl.code,' - ','PS')
+			WHEN status_roster_simple IN ('WAIVERS','WAIVEINJ') THEN CONCAT(cl.code,' - ','WV')
+			WHEN status_roster_simple IN ('EXEMPT') THEN CONCAT(cl.code,' - ','EXE')
+			WHEN status_roster_simple IN ('RESERVE') THEN CONCAT(cl.code,' - ','RES')
+			WHEN status_roster_simple IN ('INJURED') THEN CONCAT(cl.code,' - ','INJ')
+			WHEN status_roster_simple IN ('PUP') THEN CONCAT(cl.code,' - ','PUP')
+			WHEN status_roster_simple IN ('SUSPENDED','ACTIVEEXEMPT') THEN CONCAT(cl.code,' - ','SUS')
+			WHEN status_roster_simple IN ('RETIRED') THEN CONCAT(cl.code,' - ','RET')
+			WHEN status_roster_simple IN ('ACTIVE') THEN CONCAT(cl.code,' - ','ACT')
+			WHEN status_roster_simple IN ('INACTIVE') THEN CONCAT(cl.code,' - ','INA')
+		ELSE NULL
+		END AS status_code_with_club
+		,CASE WHEN status_roster_simple	IN ('FREEAGENT','PRACTICESQUAD','WAIVERS','WAIVEINJ') THEN 1 ELSE 0 END AS is_street
+		,CASE WHEN status_roster_simple	IN ('ACTIVE','INACTIVE') THEN 1 ELSE 0 END AS is_53
+		,COALESCE(mp.position_abbreviation,po.translation) AS position
+		,CASE WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('QB') THEN 'QB'
+			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('RB','WR','TE','FB','KR','PR') THEN 'ELIGIBLE'
+			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('OC','OG','OT','OL') THEN 'OL'
+			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DE','DT','NT','DL','OB','IB','RUSH','SAM') THEN 'FRONT7'
+			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DC','NB','CB','DS','SS','FS') THEN 'DB'
+			ELSE NULL
+		END AS position_group
+		,CASE WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('QB','RB','WR','TE','FB','KR','PR') THEN 'OSKILL'
+			ELSE COALESCE(mp.position_abbreviation,po.translation)
+		END AS position_group_spec_teams
+		,CASE WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('QB','RB','WR','TE','FB','KR','PR','OC','OG','OT','OL') THEN 'OFF'
+			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DE','DT','NT','DL','OB','IB','RUSH','SAM','DC','NB','CB','DS','SS','FS') THEN 'DEF'
+			ELSE 'ST'
+		END AS position_unit
+	FROM Analytics.dbo.analysis_players_gameweek_status gs
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON gs.club_id = cl.nfl_club_id
+		AND cl.is_disabled = 0
+	LEFT JOIN ClubDB.dbo.GameRoster ro
+		ON gs.nfl_game_key = ro.Gamekey
+		AND gs.nfl_player_id = ro.PlayerID
+	LEFT JOIN Analytics.dbo.map_nfl_positions_2020 mp
+		ON ro.positionabbr = mp.position
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON gs.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE gs.season = 2019
+		AND gs.[week] = 1
+		AND season_type = 'REG'
+	ORDER BY gs.season
+		,gs.season_type DESC --so reg before post
+		,gs.[week]
+		,gs.nfl_player_id
+		
+
+
+
+
+
+select min(season)
+from [AnalyticsWork].[dbo].[analysis_players_elo_ratings_regular_new]
+
+select pff_gameseason
+,count(*)
+from pff.dbo.pffplays p
+inner join pff.dbo.PFFOffense o
+on p.pff_playid = o.pff_playid
+where pff_week not like 'P%'
+group by  pff_gameseason
+order by  pff_gameseason
