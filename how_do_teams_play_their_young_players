@@ -155,7 +155,7 @@ OUTPUT TABLES:
 IF OBJECT_ID('tempdb..#temp_player_list') IS NOT NULL
 	DROP TABLE #temp_player_list
 
-	SELECT DISTINCT nfl_id AS nfl_player_id
+	SELECT nfl_id AS nfl_player_id
 		,pl.id AS bane_player_id
 		,CONCAT(last_name,', ',goes_by) AS player
 		,nfl_entry_year
@@ -163,6 +163,7 @@ IF OBJECT_ID('tempdb..#temp_player_list') IS NOT NULL
 		,draft_number
 		,cl.nfl_club_id AS nfl_entry_club_id_not_bane
 		,COALESCE(po.position,pos.translation) AS position
+		,pos.team AS side_of_ball
 		,legacy_grade	
 		,COALESCE(on_53,0) AS on_53
 	INTO #temp_player_list
@@ -182,138 +183,388 @@ IF OBJECT_ID('tempdb..#temp_player_list') IS NOT NULL
 		AND pl.draft_year >= 2005
 		AND ABS(pl.draft_year - pl.nfl_entry_year) < 10
 		AND pl.nfl_id IS NOT NULL
-	
-/*
-SELECT * 
-FROM #temp_player_list
-ORDER BY nfl_player_id, season
-*/
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Create a table of all snaps since 2012.
-
-OUTPUT TABLES:
-#temp_all_snaps
+Create a Play Time Table
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_all_snaps exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
-	DROP TABLE #temp_all_snaps
+-- Check if #temp_play_times exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_times') IS NOT NULL
+	DROP TABLE #temp_play_times
 
-	SELECT sp.pff_GSISPLAYERID AS nfl_player_id
-		,sp.pff_PLAYID AS pff_play_id
-		,pp.pff_GAMEID AS pff_game_id
-		,pp.pff_GAMESEASON AS season
-		,CAST(pff_WEEK AS INT) AS [week]
-		,pff_TEAM AS team
-		,'special teams' AS snap_type
-		,CASE WHEN pff_POSITION = 'P' THEN 'PT  '	
-			WHEN pff_POSITION = 'H' THEN 'HO  ' 
-			ELSE CONCAT(LEFT(pff_position,2),'  ') 
-		END AS position_play
-	INTO #temp_all_snaps
-	FROM PFF.dbo.PFFSpecial sp
-	INNER JOIN PFF.dbo.PFFPlays pp
-		ON sp.pff_PLAYID = pp.pff_PLAYID
-	WHERE pff_GAMESEASON >= 2012
-		AND pff_WEEK NOT LIKE 'P%'
-		AND pff_WEEK NOT IN ('WC','DP','CC','SB')
-
-	INSERT INTO #temp_all_snaps
-	SELECT nfl_player_id
-		,da.pff_play_id
-		,pff_game_id
-		,season
-		,[week]
-		,team
-		,'defense' AS snap_type	
-		,position_blt AS position_play
-	FROM Analytics.dbo.stage_plays_player_defensive_alignment da
-	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
-		ON da.pff_play_id = an.pff_play_id
-	WHERE season >= 2012
-		AND season_type = 'REG'
+	SELECT PlayerID AS nfl_player_id
+		,pt.season
+		,pt.ClubID AS nfl_club_id
+		,COUNT(gs.nfl_game_key) AS games
+		,SUM(CASE WHEN (status_roster_simple = 'INJURED' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NOT NULL)) THEN NULL ELSE CAST(OffensivePlays AS FLOAT) END) / NULLIF(SUM(CASE WHEN (status_roster_simple = 'INJURED' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NOT NULL)) THEN NULL ELSE CAST(TeamOffensivePlays AS FLOAT) END),0) AS play_time_offense
+		,SUM(CASE WHEN (status_roster_simple = 'INJURED' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NOT NULL)) THEN NULL ELSE CAST(DefensivePlays AS FLOAT) END) / NULLIF(SUM(CASE WHEN (status_roster_simple = 'INJURED' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NOT NULL)) THEN NULL ELSE CAST(TeamDefensivePlays AS FLOAT) END),0) AS play_time_defense
+		,SUM(CASE WHEN (status_roster_simple = 'INJURED' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NOT NULL)) THEN NULL ELSE CAST(SpecialTeamPlays AS FLOAT) END) / NULLIF(SUM(CASE WHEN (status_roster_simple = 'INJURED' OR (status_roster_simple = 'INACTIVE' AND injury_status_week IS NOT NULL)) THEN NULL ELSE CAST(TeamSpecialTeamPlays AS FLOAT) END),0) AS play_time_st
+	INTO #temp_play_times
+	FROM ClubDB.dbo.PlayTime pt
+	INNER JOIN [BaneProductionAnalytics].dbo.pro_games pg
+		ON pt.GameKey = pg.nfl_game_key
+	INNER JOIN Analytics.dbo.analysis_players_gameweek_status gs
+		ON pt.PlayerID = gs.nfl_player_id
+		AND pt.GameKey = gs.nfl_game_key
+	WHERE UPPER(pg.season_type) = 'REG'
+	GROUP BY PlayerID	  
+		,pt.season
+		,pt.ClubID
 
 
-	INSERT INTO #temp_all_snaps
-	SELECT nfl_player_id
-		,oa.pff_play_id
-		,pff_game_id
-		,season
-		,[week]
-		,team
-		,'offense' AS snap_type
-		,position_blt AS position_play
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the season to the offensive alignment table
+
+OUTPUT TABLES:
+#temp_plays_player_offensive_alignment
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_plays_player_offensive_alignment exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_plays_player_offensive_alignment') IS NOT NULL
+	DROP TABLE #temp_plays_player_offensive_alignment
+
+	SELECT oa.*
+		,an.season
+	INTO #temp_plays_player_offensive_alignment
 	FROM Analytics.dbo.stage_plays_player_offensive_alignment oa
 	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
 		ON oa.pff_play_id = an.pff_play_id
 	WHERE season >= 2012
-		AND season_type = 'REG'
-		AND position_blt <> 'QB'
+		AND season_type_adjusted = 'REGPOST'
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Join the player info to the snaps list.
+Join the season to the defensive alignment table
 
 OUTPUT TABLES:
-#temp_snaps_player_join
+#temp_plays_player_defensive_alignment
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_snaps_player_join exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_snaps_player_join') IS NOT NULL
-	DROP TABLE #temp_snaps_player_join
+-- Check if #temp_plays_player_defensive_alignment exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_plays_player_defensive_alignment') IS NOT NULL
+	DROP TABLE #temp_plays_player_defensive_alignment
 
-	SELECT pff_play_id
-		,pff_game_id
-		,season
-		,[week]
-		,team
-		,snap_type
-		,position_play
-		,pl.*
-		,season - nfl_entry_year + 1 AS season_in_league
-	INTO #temp_snaps_player_join
-	FROM #temp_all_snaps sn
-	INNER JOIN #temp_player_list pl
-		ON sn.nfl_player_id = pl.nfl_player_id
+	SELECT oa.*
+		,an.season
+	INTO #temp_plays_player_defensive_alignment
+	FROM Analytics.dbo.stage_plays_player_defensive_alignment oa
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON oa.pff_play_id = an.pff_play_id
+	WHERE season >= 2012
+		AND season_type_adjusted = 'REGPOST'
 
-	
+
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Sum up team snaps
+Join a player's season grade to every play he had for a season.  Then you can sum
+up snaps by position played for every team and position.
+
+Insert the offensive data then the defensive data.
 
 OUTPUT TABLES:
-#temp_snaps_by_team
+#temp_players_snaps_with_grades
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_snaps_by_team exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_snaps_by_team') IS NOT NULL
-	DROP TABLE #temp_snaps_by_team
+-- Check if #temp_players_snaps_with_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_players_snaps_with_grades') IS NOT NULL
+	DROP TABLE #temp_players_snaps_with_grades
 
-	SELECT season
-		,team
-		,'all' AS snap_type
-		,COUNT(pff_play_id) AS team_player_snaps
-		,SUM(CASE WHEN season_in_league = 1 THEN 1 ELSE 0 END) AS team_player_snaps_year_1
-		,SUM(CASE WHEN season_in_league = 2 THEN 1 ELSE 0 END) AS team_player_snaps_year_2
-		,SUM(CASE WHEN season_in_league = 3 THEN 1 ELSE 0 END) AS team_player_snaps_year_3
-		,SUM(CASE WHEN season_in_league IN (1,2) THEN 1 ELSE 0 END) AS team_player_snaps_year_1_2
-	INTO #temp_snaps_by_team
-	FROM #temp_snaps_player_join
-	WHERE snap_type <> 'special teams'
-	GROUP BY season
-		,team
+	SELECT oa.nfl_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,CASE WHEN position_blt IN ('LT','RT') THEN 'OT'
+			WHEN position_blt IN ('LG','OC','RG') THEN 'OG'
+			ELSE position_blt
+		END AS position_blt
+		,oa.pff_play_id
+		,oa.season
+		,cl.nfl_club_id
+		,oa.pff_pp_id
+		,CASE WHEN oa.team = 'SD' THEN 'LAC' WHEN oa.team = 'SL' THEN 'LA' ELSE oa.team END AS club
+		,CASE WHEN pgc.grade_bucket < 5.7 THEN 5.7
+			ELSE ISNULL(pgc.grade_bucket,5.7)
+		END AS pro_grade_current
+	INTO #temp_players_snaps_with_grades
+	FROM #temp_plays_player_offensive_alignment oa
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON oa.nfl_player_id = pl.nfl_id	
+		AND pl.is_deleted = 0
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgc
+		ON oa.nfl_player_id = pgc.nfl_player_id
+		AND oa.season = pgc.report_season
+		AND pgc.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_grades)
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON CASE WHEN oa.team = 'SD' THEN 'LAC' WHEN oa.team = 'SL' THEN 'LA' ELSE oa.team END = cl.code
 
 
+	INSERT INTO #temp_players_snaps_with_grades
+	SELECT oa.nfl_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,CASE WHEN position_blt IN ('DT3T','NT','DT') THEN 'DT'
+			WHEN position_blt IN ('DE5T','DE') THEN 'DE'
+			WHEN position_blt IN ('DE43','OB34','RUSH','SAM') THEN 'OB'
+			WHEN position_blt IN ('MIKE','WILL','IB','OB43') THEN 'IB'
+			WHEN position_blt IN ('CB','NB') THEN 'DC'
+			WHEN position_blt IN ('FS','SS') THEN 'DS'
+			ELSE position_blt
+		END AS position_blt
+		,oa.pff_play_id
+		,oa.season
+		,cl.nfl_club_id
+		,oa.pff_pp_id
+		,CASE WHEN oa.team = 'SD' THEN 'LAC' WHEN oa.team = 'SL' THEN 'LA' ELSE oa.team END AS club
+		,CASE WHEN pgc.grade_bucket < 5.7 THEN 5.7
+			ELSE ISNULL(pgc.grade_bucket,5.7)
+		END AS pro_grade_current
+	FROM #temp_plays_player_defensive_alignment oa
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON oa.nfl_player_id = pl.nfl_id	
+		AND pl.is_deleted = 0
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgc
+		ON oa.nfl_player_id = pgc.nfl_player_id
+		AND oa.season = pgc.report_season
+		AND pgc.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_grades)
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON CASE WHEN oa.team = 'SD' THEN 'LAC' WHEN oa.team = 'SL' THEN 'LA' ELSE oa.team END = cl.code
 
-	truncate table Analytics.dbo.work_r_input_young_players_snaps
-	insert INTO Analytics.dbo.work_r_input_young_players_snaps
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join a player's season grade to every play he had for a season.  Then you can sum
+up snaps by position played for every team and position.
+
+OUTPUT TABLES:
+#temp_players_snaps_with_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_players_snaps_with_values exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_players_snaps_with_values') IS NOT NULL
+	DROP TABLE #temp_players_snaps_with_values
+
 	SELECT *
-	FROM #temp_snaps_by_team
+		,CASE WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (8.0) THEN 100
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (7.0) THEN 92
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.9) THEN 82
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.7,6.5) THEN 71
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.4,6.3,6.2) THEN 64
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.1,6.0) THEN 58
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.9) THEN 53.5
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.8) THEN 50
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.7) THEN 47
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.6) THEN 45.5
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.4) THEN 43
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.2) THEN 41
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.0) THEN 40
+			ELSE NULL
+		END AS pro_grade_current_value  
+	INTO #temp_players_snaps_with_values
+	FROM #temp_players_snaps_with_grades
 
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the grade weighted average value for every team, player, position, season.
+
+OUTPUT TABLES:
+#temp_weighted_average_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_weighted_average_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_weighted_average_grades') IS NOT NULL
+	DROP TABLE #temp_weighted_average_grades
+
+	SELECT club
+		,nfl_club_id
+		,season
+		,nfl_player_id
+		,position_blt
+		,COUNT(pff_pp_id) AS position_snap_count
+		,(SELECT AVG(pro_grade_current_value) FROM #temp_players_snaps_with_values ps2 WHERE ps.season = ps2.season AND ps.nfl_club_id = ps2.nfl_club_id AND ps.position_blt = ps2.position_blt AND ps.nfl_player_id <> ps2.nfl_player_id) AS current_snap_grade_avg
+	INTO #temp_weighted_average_grades
+	FROM #temp_players_snaps_with_values ps
+	GROUP BY club
+		,nfl_club_id
+		,season
+		,nfl_player_id
+		,position_blt
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Order the weighted average snap counts so you only take the position where the player played most.
+
+OUTPUT TABLES:
+#temp_weighted_average_grades_order
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_weighted_average_grades_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_weighted_average_grades_order') IS NOT NULL
+	DROP TABLE #temp_weighted_average_grades_order
+
+	SELECT *
+		,RANK() OVER (PARTITION BY nfl_player_id, season, nfl_club_id ORDER BY position_snap_count DESC, current_snap_grade_avg DESC) AS weighted_average_order
+	INTO #temp_weighted_average_grades_order
+	FROM #temp_weighted_average_grades
+	WHERE nfl_player_id = 41393
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the snaps to the player information
+
+OUTPUT TABLE:
+#temp_player_play_time
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_play_time exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_play_time') IS NOT NULL
+	DROP TABLE #temp_player_play_time
+
+	SELECT pl.nfl_player_id
+		,player
+		,CASE WHEN position IN ('SS','FS') THEN 'DS'
+			WHEN position IN ('DP','RUSH','SAM') THEN 'OB'
+			WHEN position IN ('WO','WR') THEN 'WR'
+			WHEN position IN ('OH','RB') THEN 'RB'
+			WHEN position IN ('OG','OC') THEN 'OG'
+			ELSE position
+		END AS position
+		,nfl_entry_year
+		,pt.season AS season
+		,1 AS seasons_since_draft
+		,CASE WHEN draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
+		,ec.code AS draft_team
+		,ec.nfl_club_id
+		,on_53
+		--,COALESCE(CASE WHEN pl.nfl_entry_club_id = pt.nfl_club_id THEN 1 ELSE 0 END,0) AS same_team
+		,CASE WHEN pt.nfl_player_id IS NULL THEN 0
+			WHEN side_of_ball = 'offense' THEN play_time_offense
+			WHEN side_of_ball = 'defense' THEN play_time_defense
+			ELSE NULL
+		END AS play_time
+	INTO #temp_player_play_time
+	FROM #temp_player_list pl
+	LEFT JOIN #temp_play_times pt
+		ON pl.nfl_player_id = pt.nfl_player_id
+		AND pl.nfl_entry_year = pt.season
+		AND pl.nfl_entry_club_id_not_bane = pt.nfl_club_id
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs ec
+		ON pl.nfl_entry_club_id_not_bane = ec.nfl_club_id
+		AND ec.is_disabled = 0
+
+
+	INSERT INTO #temp_player_play_time
+	SELECT pl.nfl_player_id
+		,player
+		,CASE WHEN position IN ('SS','FS') THEN 'DS'
+			WHEN position IN ('DP','RUSH','SAM') THEN 'OB'
+			WHEN position IN ('WO','WR') THEN 'WR'
+			WHEN position IN ('OH','RB') THEN 'RB'
+			WHEN position IN ('OG','OC') THEN 'OG'
+			ELSE position
+		END AS position
+		,nfl_entry_year
+		,pt.season AS season
+		,2 AS seasons_since_draft
+		,CASE WHEN draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
+		,ec.code AS draft_team
+		,ec.nfl_club_id
+		,on_53
+		--,COALESCE(CASE WHEN pl.nfl_entry_club_id = pt.nfl_club_id THEN 1 ELSE 0 END,0) AS same_team
+		,CASE WHEN pt.nfl_player_id IS NULL THEN 0
+			WHEN side_of_ball = 'offense' THEN play_time_offense
+			WHEN side_of_ball = 'defense' THEN play_time_defense
+			ELSE NULL
+		END AS play_time
+	FROM #temp_player_list pl
+	LEFT JOIN #temp_play_times pt
+		ON pl.nfl_player_id = pt.nfl_player_id
+		AND pl.nfl_entry_year + 1 = pt.season
+		AND pl.nfl_entry_club_id_not_bane = pt.nfl_club_id
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
+		ON pt.nfl_club_id = pc.nfl_club_id
+		AND pc.is_disabled = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs ec
+		ON pl.nfl_entry_club_id_not_bane = ec.nfl_club_id
+		AND ec.is_disabled = 0	
+	WHERE pl.nfl_entry_year < 2017
+
+
+	INSERT INTO #temp_player_play_time
+	SELECT pl.nfl_player_id
+		,player
+		,CASE WHEN position IN ('SS','FS') THEN 'DS'
+			WHEN position IN ('DP','RUSH','SAM') THEN 'OB'
+			WHEN position IN ('WO','WR') THEN 'WR'
+			WHEN position IN ('OH','RB') THEN 'RB'
+			WHEN position IN ('OG','OC') THEN 'OG'
+			ELSE position
+		END AS position
+		,nfl_entry_year
+		,pt.season AS season
+		,3 AS seasons_since_draft
+		,CASE WHEN draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
+		,ec.code AS draft_team
+		,ec.nfl_club_id
+		,on_53
+		--,COALESCE(CASE WHEN pl.nfl_entry_club_id = pt.nfl_club_id THEN 1 ELSE 0 END,0) AS same_team
+		,CASE WHEN pt.nfl_player_id IS NULL THEN 0
+			WHEN side_of_ball = 'offense' THEN play_time_offense
+			WHEN side_of_ball = 'defense' THEN play_time_defense
+			ELSE NULL
+		END AS play_time
+	FROM #temp_player_list pl
+	LEFT JOIN #temp_play_times pt
+		ON pl.nfl_player_id = pt.nfl_player_id
+		AND pl.nfl_entry_year + 2 = pt.season
+		AND pl.nfl_entry_club_id_not_bane = pt.nfl_club_id
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
+		ON pt.nfl_club_id = pc.nfl_club_id
+		AND pc.is_disabled = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs ec
+		ON pl.nfl_entry_club_id_not_bane = ec.nfl_club_id
+		AND ec.is_disabled = 0	
+	WHERE pl.nfl_entry_year < 2016
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the weighted average snap count to try and measure teammate quality.
+
+OUTPUT TABLE:
+#temp_player_with_teammates
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_with_teammates exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_with_teammates') IS NOT NULL
+	DROP TABLE #temp_player_with_teammates
+
+	SELECT *
+		,ag.current_snap_grade_avg AS weighted_team_grade
+	FROM #temp_player_play_time pt
+	LEFT JOIN #temp_weighted_average_grades_order ag
+		ON pt.nfl_player_id = ag.nfl_player_id
+		AND pt.season = ag.season
+		AND pt.nfl_club_id = ag.nfl_club_id
+		AND ag.weighted_average_order = 1
+
+
+
+
+
+--TRUNCATE TABLE Analytics.dbo.work_r_output_young_players_snap_pct
+--INSERT INTO Analytics.dbo.work_r_input_young_players_snap_pct
+--SELECT *
+--FROM Analytics.dbo.work_r_output_young_players_snap_pct
