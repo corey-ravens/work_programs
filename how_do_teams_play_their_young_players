@@ -3,39 +3,128 @@
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Find the player's draft board position
+Get down to one row of draft board position. Take a players draft
+board position from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_board_positions_with_order
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_board_position exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_board_position') IS NOT NULL
-	DROP TABLE #temp_board_position
+-- Check if #temp_draft_board_positions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions
 
-	SELECT nfl_id AS nfl_player_id
-		  ,COALESCE(pd.position,pa.position,pf.position) AS position
-		  ,COALESCE(pd.legacy_grade,pa.legacy_grade,pf.legacy_grade) AS legacy_grade
-	  INTO #temp_board_position
-	  FROM BaneProductionAnalytics.dbo.players pl
- LEFT JOIN BaneProductionAnalytics.dbo.draft_board_grades pd
-        ON pl.id = pd.player_id
-	   AND pd.[type] = 'pre-draft'
- LEFT JOIN BaneProductionAnalytics.dbo.draft_board_grades pa
-        ON pl.id = pa.player_id
-	   AND pa.[type] = 'post-apr'
- LEFT JOIN BaneProductionAnalytics.dbo.draft_board_grades pf
-        ON pl.id = pf.player_id
-	   AND pf.[type] = 'post-feb'
-     WHERE pl.ID IN (SELECT DISTINCT player_id FROM BaneProductionAnalytics.dbo.draft_board_grades) AND nfl_id IS NOT NULL
+	SELECT player_id AS bane_player_id
+		,position
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			ELSE NULL
+	END AS order_by
+	INTO #temp_draft_board_positions
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE position != ''
+		AND position IS NOT NULL
+		AND player_id <> 64668
 
+
+-- Check if #temp_draft_board_positions_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_with_order
+
+	SELECT bane_player_id
+		,position
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by) AS draft_board_position_order
+	INTO #temp_draft_board_positions_with_order
+	FROM #temp_draft_board_positions
+
+/*
+SELECT *
+FROM #temp_draft_board_positions_with_order
+*/
+
+-- Check if #temp_draft_board_positions_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_latest
+
+	SELECT *
+	INTO #temp_draft_board_positions_latest
+	FROM #temp_draft_board_positions_with_order
+	WHERE draft_board_position_order = 1
+
+/*
+SELECT *
+FROM #temp_draft_board_positions_latest
+*/
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Join the draft board position and player identifying informaiton
+Get down to one row of draft board grade. Take a players draft
+board grade from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_board_grades_with_order
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades
+
+	SELECT player_id AS bane_player_id
+		,legacy_grade
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			ELSE NULL
+	END AS order_by
+	INTO #temp_draft_board_grades
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE legacy_grade != ''
+		AND legacy_grade IS NOT NULL
+		AND player_id <> 64668
+
+
+-- Check if #temp_draft_board_grades_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_with_order
+
+	SELECT bane_player_id
+		,legacy_grade
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by) AS draft_board_grade_order
+	INTO #temp_draft_board_grades_with_order
+	FROM #temp_draft_board_grades
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_with_order
+*/
+
+-- Check if #temp_draft_board_grades_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_latest
+
+	SELECT *
+	INTO #temp_draft_board_grades_latest
+	FROM #temp_draft_board_grades_with_order
+	WHERE draft_board_grade_order = 1
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_latest
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 Create a temp table with all players who have been on a 53 so you can have
 a variable denoting whether a player ever made a 53. You may not want to count
 these players against teams that get them.
+
+OUTPUT TABLES:
+#temp_player_on_53
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -43,230 +132,188 @@ these players against teams that get them.
 IF OBJECT_ID('tempdb..#temp_player_on_53') IS NOT NULL
 	DROP TABLE #temp_player_on_53
 
-	SELECT DISTINCT player_id AS nfl_player_id
-		  ,1 AS on_53
-	  INTO #temp_player_on_53
-	  FROM BaneProductionAnalytics.dbo.nfl_game_participations gp
-INNER JOIN BaneProductionAnalytics.dbo.pro_games pg
-		ON gp.nfl_game_id = pg.id
-	 WHERE [status] IN ('did not play','not active','played','started','substitute')
-	   AND season_type IN ('reg','post')
-	 
--- Check if #temp_player_list_all exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_player_list_all') IS NOT NULL
-	DROP TABLE #temp_player_list_all
+	SELECT DISTINCT nfl_player_id
+		,1 AS on_53
+	INTO #temp_player_on_53
+	FROM Analytics.dbo.analysis_players_gameweek_status
+	WHERE status_roster_simple IN ('ACTIVE','INACTIVE')
+		AND season_type IN ('REG','POST')
 
-	SELECT nfl_id AS nfl_player_id
-	      ,CONCAT(last_name,', ',goes_by) AS player
-		  ,nfl_entry_year AS draft_year
-		  ,nfl_entry_year AS season
-		  ,draft_round
-		  ,cl.nfl_club_id AS nfl_entry_club_id_not_bane
-		  ,COALESCE(position,abbreviation) AS position_draft_board
-		  ,legacy_grade	
-		  ,COALESCE(on_53,0) AS on_53
-	  INTO #temp_player_list_all
-	  FROM BaneProductionAnalytics.dbo.players pl
- LEFT JOIN #temp_board_position po
-        ON pl.nfl_id = po.nfl_player_id
- LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
-        ON pl.nfl_entry_club_id = cl.id
-	  AND cl.is_disabled = 0
- LEFT JOIN BaneProductionAnalytics.dbo.positions pos
-        ON pl.position_id = pos.id
- LEFT JOIN #temp_player_on_53 o53
-        ON pl.id = o53.nfl_player_id
-     WHERE nfl_entry_year >= 2005 
-	   AND nfl_entry_year < 2016
-	   AND pl.nfl_id IS NOT NULL
-	  
--- Check if #temp_player_list_plus_one exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_player_list_plus_one') IS NOT NULL
-	DROP TABLE #temp_player_list_plus_one
-
-	SELECT nfl_id AS nfl_player_id
-	      ,CONCAT(last_name,', ',goes_by) AS player
-		  ,nfl_entry_year AS draft_year
-		  ,nfl_entry_year + 1 AS season
-		  ,draft_round
-		  ,cl.nfl_club_id AS nfl_entry_club_id_not_bane
-		  ,COALESCE(position,abbreviation) AS position_draft_board
-		  ,legacy_grade
-		  ,COALESCE(on_53,0) AS on_53
-	  INTO #temp_player_list_plus_one
-	  FROM BaneProductionAnalytics.dbo.players pl
- LEFT JOIN #temp_board_position po
-        ON pl.nfl_id = po.nfl_player_id
- LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
-        ON pl.nfl_entry_club_id = cl.id
-	  AND cl.is_disabled = 0
- LEFT JOIN BaneProductionAnalytics.dbo.positions pos
-        ON pl.position_id = pos.id
- LEFT JOIN #temp_player_on_53 o53
-        ON pl.id = o53.nfl_player_id
-     WHERE nfl_entry_year >= 2005 
-	   AND nfl_entry_year < 2015
-	   AND nfl_id IS NOT NULL
-
-	  
--- Check if #temp_player_list_plus_two exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_player_list_plus_two') IS NOT NULL
-	DROP TABLE #temp_player_list_plus_two
-
-	SELECT nfl_id AS nfl_player_id
-	      ,CONCAT(last_name,', ',goes_by) AS player
-		  ,nfl_entry_year AS draft_year
-		  ,nfl_entry_year + 2 AS season
-		  ,draft_round
-		  ,cl.nfl_club_id AS nfl_entry_club_id_not_bane
-		  ,COALESCE(position,abbreviation) AS position_draft_board
-		  ,legacy_grade
-		  ,COALESCE(on_53,0) AS on_53  
-	  INTO #temp_player_list_plus_two
-	  FROM BaneProductionAnalytics.dbo.players pl
- LEFT JOIN #temp_board_position po
-        ON pl.nfl_id = po.nfl_player_id
- LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
-        ON pl.nfl_entry_club_id = cl.id
-	  AND cl.is_disabled = 0
- LEFT JOIN BaneProductionAnalytics.dbo.positions pos
-        ON pl.position_id = pos.id
- LEFT JOIN #temp_player_on_53 o53
-        ON pl.id = o53.nfl_player_id
-     WHERE nfl_entry_year >= 2005 
-	   AND nfl_entry_year < 2014
-	   AND nfl_id IS NOT NULL
-	  
--- Check if #temp_player_list_plus_three exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_player_list_plus_three') IS NOT NULL
-	DROP TABLE #temp_player_list_plus_three
-
-	SELECT nfl_id AS nfl_player_id
-	      ,CONCAT(last_name,', ',goes_by) AS player
-		  ,nfl_entry_year AS draft_year
-		  ,nfl_entry_year + 3 AS season
-		  ,draft_round
-		  ,cl.nfl_club_id AS nfl_entry_club_id_not_bane
-		  ,COALESCE(position,abbreviation) AS position_draft_board
-		  ,legacy_grade
-		  ,COALESCE(on_53,0) AS on_53  
-	  INTO #temp_player_list_plus_three
-	  FROM BaneProductionAnalytics.dbo.players pl
- LEFT JOIN #temp_board_position po
-        ON pl.nfl_id = po.nfl_player_id
- LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
-        ON pl.nfl_entry_club_id = cl.id
-	  AND cl.is_disabled = 0
- LEFT JOIN BaneProductionAnalytics.dbo.positions pos
-        ON pl.position_id = pos.id
- LEFT JOIN #temp_player_on_53 o53
-        ON pl.id = o53.nfl_player_id
-     WHERE nfl_entry_year >= 2005 
-	   AND nfl_entry_year < 2013
-	   AND nfl_id IS NOT NULL
-
-
-INSERT INTO #temp_player_list_all
-SELECT * 
-FROM #temp_player_list_plus_one 
-
-INSERT INTO #temp_player_list_all
-SELECT * 
-FROM #temp_player_list_plus_two
-
-INSERT INTO #temp_player_list_all
-SELECT * 
-FROM #temp_player_list_plus_three
-
-/*
-SELECT * 
-FROM #temp_player_list_all
-ORDER BY nfl_player_id, season
-*/
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Join the snaps to the player information
+Join the draft board position and player identifying information.
 
-Add in extra rows for each year since a player's draft year - if a player only played one year with that team,
-his average EQG will be too high for his first 4 seasons.  But if you use total eqg, then you can't really use
-players with less than 4 seasons played.
+You can join this to the play data to get snaps played by first and second year players.
+
+OUTPUT TABLES:
+#temp_player_list
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-TRUNCATE TABLE Analytics.dbo.work_r_input_young_players_eqg
+-- Check if #temp_player_list exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_list') IS NOT NULL
+	DROP TABLE #temp_player_list
 
-INSERT INTO Analytics.dbo.work_r_input_young_players_eqg
-	SELECT pl.nfl_player_id
-		  ,player
-		  ,CASE WHEN position_draft_board IN ('SS','FS') THEN 'DS'
-				WHEN position_draft_board IN ('DP','RUSH','SAM') THEN 'OB'
-				WHEN position_draft_board IN ('WO','WR') THEN 'WO'
-				WHEN position_draft_board IN ('OH','RB') THEN 'OH'
-				ELSE position_draft_board
-		   END AS position_draft_board
-		  ,pl.season
-		  ,pl.season - draft_year + 1 AS seasons_since_draft
-		  ,draft_year
-		  ,CASE WHEN draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
-		  ,ec.code AS draft_team
-		  ,pc.code AS snap_team
-		  ,on_53
-		  --,COALESCE(CASE WHEN pl.nfl_entry_club_id = pt.nfl_club_id THEN 1 ELSE 0 END,0) AS same_team
-		  ,COALESCE(equivalent_games,0) AS equivalent_games
-	  --INTO Analytics.dbo.work_r_input_young_players_eqg
-      FROM #temp_player_list_all pl
- LEFT JOIN Analytics.dbo.stage_players_season_playtime pt
-		ON pl.nfl_player_id = pt.nfl_player_id
-	   AND pl.season = pt.season
-	   AND pt.season_type = 'REG'
-	   AND pl.nfl_entry_club_id_not_bane = pt.nfl_club_id
- LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
-		ON pt.nfl_club_id = pc.nfl_club_id
-	   AND pc.is_disabled = 0
- LEFT JOIN BaneProductionAnalytics.dbo.clubs ec
-		ON pl.nfl_entry_club_id_not_bane = ec.nfl_club_id
-	   AND ec.is_disabled = 0
-
-SELECT * FROM Analytics.dbo.work_r_input_young_players_eqg
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+	SELECT DISTINCT nfl_id AS nfl_player_id
+		,pl.id AS bane_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,nfl_entry_year
+		,draft_round
+		,draft_number
+		,cl.nfl_club_id AS nfl_entry_club_id_not_bane
+		,COALESCE(po.position,pos.translation) AS position
+		,legacy_grade	
+		,COALESCE(on_53,0) AS on_53
+	INTO #temp_player_list
+	FROM BaneProductionAnalytics.dbo.players pl
+	LEFT JOIN #temp_draft_board_positions_latest po
+		ON pl.id = po.bane_player_id
+	LEFT JOIN #temp_draft_board_grades_latest gr
+		ON pl.id = gr.bane_player_id
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON pl.nfl_entry_club_id = cl.id
+		--AND cl.is_disabled = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.positions pos
+		ON pl.position_id = pos.id
+	LEFT JOIN #temp_player_on_53 o53
+		ON pl.nfl_id = o53.nfl_player_id
+	WHERE pl.is_deleted = 0
+		AND pl.draft_year >= 2005
+		AND ABS(pl.draft_year - pl.nfl_entry_year) < 10
+		AND pl.nfl_id IS NOT NULL
+	
+/*
+SELECT * 
+FROM #temp_player_list
+ORDER BY nfl_player_id, season
+*/
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Get the average EqG
+Create a table of all snaps since 2012.
 
+OUTPUT TABLES:
+#temp_all_snaps
 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
+-- Check if #temp_all_snaps exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
+	DROP TABLE #temp_all_snaps
+
+	SELECT sp.pff_GSISPLAYERID AS nfl_player_id
+		,sp.pff_PLAYID AS pff_play_id
+		,pp.pff_GAMEID AS pff_game_id
+		,pp.pff_GAMESEASON AS season
+		,CAST(pff_WEEK AS INT) AS [week]
+		,pff_TEAM AS team
+		,'special teams' AS snap_type
+		,CASE WHEN pff_POSITION = 'P' THEN 'PT  '	
+			WHEN pff_POSITION = 'H' THEN 'HO  ' 
+			ELSE CONCAT(LEFT(pff_position,2),'  ') 
+		END AS position_play
+	INTO #temp_all_snaps
+	FROM PFF.dbo.PFFSpecial sp
+	INNER JOIN PFF.dbo.PFFPlays pp
+		ON sp.pff_PLAYID = pp.pff_PLAYID
+	WHERE pff_GAMESEASON >= 2012
+		AND pff_WEEK NOT LIKE 'P%'
+		AND pff_WEEK NOT IN ('WC','DP','CC','SB')
+
+	INSERT INTO #temp_all_snaps
 	SELECT nfl_player_id
-		  ,player
-		  ,position_draft_board
-		  ,draft_year
-		  ,draft_round
-		  ,draft_team
-		  ,AVG(equivalent_games) AS eqg_avg
-		  ,SUM(equivalent_games) AS eqg_sum
-		  ,COUNT(equivalent_games) AS eqg_count
-      FROM #temp_player_season_eqg
-  GROUP BY nfl_player_id
-		  ,player
-		  ,position_draft_board
-		  ,draft_year
-		  ,draft_round
-		  ,draft_team
+		,da.pff_play_id
+		,pff_game_id
+		,season
+		,[week]
+		,team
+		,'defense' AS snap_type	
+		,position_blt AS position_play
+	FROM Analytics.dbo.stage_plays_player_defensive_alignment da
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON da.pff_play_id = an.pff_play_id
+	WHERE season >= 2012
+		AND season_type = 'REG'
 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/		 
+
+	INSERT INTO #temp_all_snaps
+	SELECT nfl_player_id
+		,oa.pff_play_id
+		,pff_game_id
+		,season
+		,[week]
+		,team
+		,'offense' AS snap_type
+		,position_blt AS position_play
+	FROM Analytics.dbo.stage_plays_player_offensive_alignment oa
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON oa.pff_play_id = an.pff_play_id
+	WHERE season >= 2012
+		AND season_type = 'REG'
+		AND position_blt <> 'QB'
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the player info to the snaps list.
+
+OUTPUT TABLES:
+#temp_snaps_player_join
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_snaps_player_join exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_snaps_player_join') IS NOT NULL
+	DROP TABLE #temp_snaps_player_join
+
+	SELECT pff_play_id
+		,pff_game_id
+		,season
+		,[week]
+		,team
+		,snap_type
+		,position_play
+		,pl.*
+		,season - nfl_entry_year + 1 AS season_in_league
+	INTO #temp_snaps_player_join
+	FROM #temp_all_snaps sn
+	INNER JOIN #temp_player_list pl
+		ON sn.nfl_player_id = pl.nfl_player_id
+
+	
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up team snaps
+
+OUTPUT TABLES:
+#temp_snaps_by_team
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_snaps_by_team exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_snaps_by_team') IS NOT NULL
+	DROP TABLE #temp_snaps_by_team
+
+	SELECT season
+		,team
+		,'all' AS snap_type
+		,COUNT(pff_play_id) AS team_player_snaps
+		,SUM(CASE WHEN season_in_league = 1 THEN 1 ELSE 0 END) AS team_player_snaps_year_1
+		,SUM(CASE WHEN season_in_league = 2 THEN 1 ELSE 0 END) AS team_player_snaps_year_2
+		,SUM(CASE WHEN season_in_league = 3 THEN 1 ELSE 0 END) AS team_player_snaps_year_3
+		,SUM(CASE WHEN season_in_league IN (1,2) THEN 1 ELSE 0 END) AS team_player_snaps_year_1_2
+	INTO #temp_snaps_by_team
+	FROM #temp_snaps_player_join
+	WHERE snap_type <> 'special teams'
+	GROUP BY season
+		,team
+
+
+
+	truncate table Analytics.dbo.work_r_input_young_players_snaps
+	insert INTO Analytics.dbo.work_r_input_young_players_snaps
+	SELECT *
+	FROM #temp_snaps_by_team
+
