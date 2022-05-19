@@ -28,8 +28,8 @@ OUTPUT TABLES:
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-DECLARE @iSeason INT = 2006
-DECLARE @iWeek INT = 1
+DECLARE @iSeason INT = 2018
+DECLARE @iWeek INT = 17
 
 -- Check if #temp_players_gameweek_statuses exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
@@ -42,7 +42,10 @@ IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
 		,CASE WHEN nfl_game_key IS NULL THEN 999999 ELSE nfl_game_key END AS nfl_game_key
 		,gs.status_roster_simple
 		,gs.club_id AS nfl_club_id
-		,CASE WHEN status_roster_simple	IN ('FREEAGENT','PRACTICESQUAD','WAIVERS','WAIVEINJ') THEN 1 ELSE 0 END AS is_street
+		,CASE WHEN status_roster_simple	IN ('FREEAGENT') AND DATEDIFF(DAY,status_start_date,status_end_date) <= 365 THEN 1
+			WHEN status_roster_simple	IN ('PRACTICESQUAD','WAIVERS','WAIVEINJ') THEN 1 
+			ELSE 0 
+		END AS is_street
 		,CASE WHEN status_roster_simple IN ('ACTIVE','INACTIVE') THEN 1 ELSE 0 END AS is_on_53
 		,CASE WHEN status_roster_simple	IN ('INACTIVE') AND injury_status_week IS NULL THEN 1 ELSE 0 END AS is_healthy_scratch
 		,CASE WHEN status_roster_simple IN ('ACTIVE') THEN 1 ELSE 0 END AS is_active
@@ -54,9 +57,6 @@ IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
 			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DC','NB','CB','DS','SS','FS') THEN 'DB'
 			ELSE NULL
 		END AS position_group
-		,CASE WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('QB','RB','WR','TE','FB','KR','PR') THEN 'OSKILL'
-			ELSE COALESCE(mp.position_abbreviation,po.translation)
-		END AS position_group_spec_teams
 		,CASE WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('QB','RB','WR','TE','FB','KR','PR','OC','OG','OT','OL') THEN 'off'
 			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DE','DT','NT','DL','OB','IB','RUSH','SAM','DC','NB','CB','DS','SS','FS') THEN 'def'
 			ELSE 'st'
@@ -108,6 +108,7 @@ IF OBJECT_ID('tempdb..#temp_roster_vs_street') IS NOT NULL
 		AND ro.season_type = st.season_type
 		AND ro.[week] = st.[week]
 		AND ro.nfl_player_id <> st.nfl_player_id
+		AND ro.position_group = st.position_group
 		AND st.is_street = 1
 	WHERE ro.is_on_53 = 1
 
@@ -136,6 +137,7 @@ IF OBJECT_ID('tempdb..#temp_active_vs_healthy_scratch') IS NOT NULL
 	INNER JOIN #temp_players_gameweek_statuses hs
 		ON ac.nfl_game_key = hs.nfl_game_key
 		AND ac.nfl_club_id = hs.nfl_club_id
+		AND ac.position_group = hs.position_group
 		AND ac.nfl_player_id <> hs.nfl_player_id
 		AND hs.is_healthy_scratch = 1
 	WHERE ac.is_active = 1
@@ -354,45 +356,63 @@ IF OBJECT_ID('tempdb..#temp_elo_matchups') IS NOT NULL
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Generate the 'expected score' for each player by comparing their previous rating and their opponent's previous rating.  Players who don't have previous ratings
-get the base rating of 1400 (read ELO online explanation about why they start at 1400 and the expected score formula).
+Generate the 'expected score' for each player by comparing their previous rating and their opponent's previous rating.  
 
-Create the recent_ratings table separately so the subqueries don't make the program run really slowly.
+Because there will be players who didn't appear in previous games, first create the table of players to score which has all players involved this week.  Then join
+the recent ratings table to that.  Players who don't have previous ratings get the base rating of 1400 (read ELO online explanation about why they start at 1400 and
+the expected score formula).
 
 OUTPUT TABLES:
+#temp_most_recent_ratings
 #temp_elo_matchups_with_ratings
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_most_recent_ratings exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_most_recent_ratings') IS NOT NULL
-	DROP TABLE #temp_most_recent_ratings
+-- Check if #temp_players_to_score exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_players_to_score') IS NOT NULL
+	DROP TABLE #temp_players_to_score
 
+	SELECT DISTINCT nfl_player_id
+		,'special_teams' AS rating_type
+	INTO #temp_players_to_score
+	FROM #temp_players_gameweek_statuses
+	WHERE is_on_53 = 1
+		OR is_street = 1
+
+	INSERT INTO #temp_players_to_score
+	SELECT DISTINCT nfl_player_id
+		,'regular' AS rating_type
+	FROM #temp_players_gameweek_statuses
+	WHERE is_on_53 = 1
+		OR is_street = 1
+
+
+-- Check if #temp_analysis_players_elo_ratings_COREY exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_analysis_players_elo_ratings_COREY') IS NOT NULL
+	DROP TABLE #temp_analysis_players_elo_ratings_COREY
+		
 	SELECT nfl_player_id
 		,rating_type
-		,MAX(rating) AS rating_previous
-	INTO #temp_most_recent_ratings
-	FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee
-	WHERE ee.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee1 WHERE ee.nfl_player_id = ee1.nfl_player_id AND ee.rating_type = ee1.rating_type)
-		AND ee.[week] = (SELECT MAX([week]) FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee2 WHERE ee.nfl_player_id = ee2.nfl_player_id  AND ee.rating_type = ee2.rating_type
-							AND ee2.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee3 WHERE ee2.nfl_player_id = ee3.nfl_player_id AND ee2.rating_type = ee3.rating_type))
-	GROUP BY nfl_player_id
-		,rating_type
+		,rating
+		,RANK() OVER (PARTITION BY nfl_player_id, rating_type ORDER BY season DESC, [week] DESC, rating DESC) AS rating_order
+	INTO #temp_analysis_players_elo_ratings_COREY
+	FROM Analytics.dbo.analysis_players_elo_ratings_COREY
 
-/*
-This is in case you want to switch from subqueries to ranking...whichever is quicker.
 
 -- Check if #temp_most_recent_ratings exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_most_recent_ratings') IS NOT NULL
 	DROP TABLE #temp_most_recent_ratings
 		
-	SELECT nfl_player_id
-		,rating_type
-		,rating AS previous_rating
-		,RANK() OVER (PARTITION BY nfl_player_id, rating_type ORDER BY season DESC, [week] DESC, rating DESC) AS rating_order
+	SELECT ts.nfl_player_id
+		,ts.rating_type
+		,CAST(ISNULL(rating,1400) AS FLOAT) AS rating_previous
 	INTO #temp_most_recent_ratings
-	FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY
-*/
+	FROM #temp_players_to_score ts
+	LEFT JOIN #temp_analysis_players_elo_ratings_COREY el
+		ON ts.nfl_player_id = el.nfl_player_id
+		AND ts.rating_type = el.rating_type
+		AND el.rating_order = 1
+
 
 -- Check if #temp_elo_matchups_with_ratings exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_elo_matchups_with_ratings') IS NOT NULL
