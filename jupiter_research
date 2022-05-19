@@ -49,70 +49,175 @@ Season INT
 ,OffSeasonHold FLOAT	
 )	
 	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2012,2012,N'2012-02-06'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2013,2013,N'2013-02-04'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2014,2014,N'2014-02-03'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2015,2015,N'2015-02-02'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2016,2016,N'2016-02-08'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2017,2017,N'2017-02-06'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2018,2018,N'2018-02-05'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2019,2019,N'2019-02-04'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2020,2020,N'2020-02-03'	
-INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2021,2021,N'2021-02-08'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2012,2012,N'2012-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2013,2013,N'2013-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2014,2014,N'2014-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2015,2015,N'2015-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2016,2016,N'2016-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2017,2017,N'2017-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2018,2018,N'2018-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2019,2019,N'2019-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2020,2020,N'2020-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2021,2021,N'2021-01-18'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2022,2022,N'2022-01-19'	
 	
 	
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 225000 WHERE season = 2012
 UPDATE #temp_cap_numbers SET Room = Room + 225000 WHERE season = 2012
-UPDATE #temp_cap_numbers SET LeagueCap = 120600000 WHERE season = 2012
+--UPDATE #temp_cap_numbers SET LeagueCap = 120600000 WHERE season = 2012
 	
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 2400000 WHERE season = 2013
 UPDATE #temp_cap_numbers SET Room = Room + 2400000 WHERE season = 2013
-UPDATE #temp_cap_numbers SET LeagueCap = 123000000 WHERE season = 2013	
+--UPDATE #temp_cap_numbers SET LeagueCap = 123000000 WHERE season = 2013	
 
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10000000 WHERE season = 2014
 UPDATE #temp_cap_numbers SET Room = Room + 10000000 WHERE season = 2014
-UPDATE #temp_cap_numbers SET LeagueCap = 133000000 WHERE season = 2014	
+--UPDATE #temp_cap_numbers SET LeagueCap = 133000000 WHERE season = 2014	
 
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10280000 WHERE season = 2015
 UPDATE #temp_cap_numbers SET Room = Room + 10280000 WHERE season = 2015
-UPDATE #temp_cap_numbers SET LeagueCap = 143280000 WHERE season = 2015
+--UPDATE #temp_cap_numbers SET LeagueCap = 143280000 WHERE season = 2015
 
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 11990000 WHERE season = 2016
 UPDATE #temp_cap_numbers SET Room = Room + 11990000 WHERE season = 2016
-UPDATE #temp_cap_numbers SET LeagueCap = 155270000 WHERE season = 2016
+--UPDATE #temp_cap_numbers SET LeagueCap = 155270000 WHERE season = 2016
 
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 11730000 WHERE season = 2017
 UPDATE #temp_cap_numbers SET Room = Room + 11730000 WHERE season = 2017
-UPDATE #temp_cap_numbers SET LeagueCap = 167000000 WHERE season = 2017
+--UPDATE #temp_cap_numbers SET LeagueCap = 167000000 WHERE season = 2017
 
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10200000 WHERE season = 2018
 UPDATE #temp_cap_numbers SET Room = Room + 10200000 WHERE season = 2018
-UPDATE #temp_cap_numbers SET LeagueCap = 177200000 WHERE season = 2018
+--UPDATE #temp_cap_numbers SET LeagueCap = 177200000 WHERE season = 2018
 
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 11000000 WHERE season = 2019
 UPDATE #temp_cap_numbers SET Room = Room + 11000000 WHERE season = 2019
-UPDATE #temp_cap_numbers SET LeagueCap = 188200000 WHERE season = 2019
+--UPDATE #temp_cap_numbers SET LeagueCap = 188200000 WHERE season = 2019
 
 UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10000000 WHERE season = 2020
 UPDATE #temp_cap_numbers SET Room = Room + 10000000 WHERE season = 2020
-UPDATE #temp_cap_numbers SET LeagueCap = 198200000 WHERE season = 2020
+--UPDATE #temp_cap_numbers SET LeagueCap = 198200000 WHERE season = 2020
 
 
-UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap - 18200000 WHERE season = 2021
-UPDATE #temp_cap_numbers SET Room = Room - 18200000 - 792000 WHERE season = 2021
-UPDATE #temp_cap_numbers SET LeagueCap = 180000000 WHERE season = 2021
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap - 15700000 WHERE season = 2021
+UPDATE #temp_cap_numbers SET Room = Room - 15700000 WHERE season = 2021
+--UPDATE #temp_cap_numbers SET LeagueCap = 182500000 WHERE season = 2021
 
 
-	
-SELECT cl.Club_Code,cn.*	
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 25700000 WHERE season = 2022
+UPDATE #temp_cap_numbers SET Room = Room + 25700000 WHERE season = 2022
+--UPDATE #temp_cap_numbers SET LeagueCap = 208200000 WHERE season = 2022
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the dead money from Void Contracts that will hit next year's cap, but aren't accounted for in the league Stored Procedure.
+
+UPDATE TABLES:
+#temp_team_cap_summaries
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_void_caps exists, if it does drop it	
+	IF OBJECT_ID('tempdb..#temp_void_caps') IS NOT NULL	
+		DROP TABLE #temp_void_caps
+
+	SELECT fa.ClubID
+		,cl.code
+		,SUM(PotAccel + SB) AS voided_dead_money
+		,SUM(Para5) AS voided_p5
+		,COUNT(fa.PlayerID) AS num_players
+	INTO #temp_void_caps
+	FROM ClubDB.dbo.PotentialFreeAgents fa
+	INNER JOIN ClubDB.dbo.CapRollup cr
+		ON fa.PlayerID = cr.PlayerID
+		AND fa.FreeAgentSeason = cr.Season
+		AND fa.ClubID = cr.ClubID
+		AND cr.ToDate IS NULL
+	inner join BaneProductionAnalytics.dbo.clubs cl
+		ON fa.ClubID = cl.nfl_club_id
+		and cl.is_disabled = 0 
+		and cl.type = 'nfl'
+	WHERE FreeAgentSeason = (SELECT MAX(season) + 1 FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= league_year_start)
+		AND Comment LIKE '%automatically voids%'
+	GROUP BY fa.ClubID,cl.code
+
+
+	UPDATE #temp_cap_numbers
+		SET room  = room - voided_dead_money + voided_p5
+			,NumPlayers = NumPlayers - num_players
+	FROM #temp_void_caps vc
+	WHERE #temp_cap_numbers.ClubID = vc.ClubID
+		AND season = (SELECT MAX(season) + 1 FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= league_year_start)
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the paid performance escalator totals by team so you can add them in.
+
+UPDATE TABLES:
+#temp_team_ppes
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	-- Check if #temp_team_ppes exists, if it does drop it	
+	IF OBJECT_ID('tempdb..#temp_team_ppes') IS NOT NULL	
+		DROP TABLE #temp_team_ppes
+
+	CREATE TABLE #temp_team_ppes (club_code NVARCHAR(3), ClubID INT, ppe_adjustment FLOAT)
+	INSERT INTO #temp_team_ppes VALUES
+	('ARZ',22,4240010)
+	,('ATL',1,1575000)
+	,('BLT',5,3150000)
+	,('BUF',2,3120000)
+	,('CAR',32,1575000)
+	,('CHI',3,1825000)
+	,('CIN',4,1551900)
+	,('CLV',36,1575000)
+	,('DAL',6,1645000)
+	,('DEN',7,2824853)
+	,('DET',8,3120000)
+	,('GB',9,4141097)
+	,('HST',39,2928896)
+	,('IND',11,4115483)
+	,('JAX',33,1225443)
+	,('KC',12,6040501)
+	,('LA',14,4807677)
+	,('LAC',24,3044712)
+	,('LV',13,7226117)
+	,('MIA',15,4725000)
+	,('MIN',16,1575000)
+	,('NE',17,3021000)
+	,('NO',18,3039465)
+	,('NYG',19,4725000)
+	,('NYJ',20,1575000)
+	,('PHI',21,1575000)
+	,('PIT',23,1711233)
+	,('SEA',26,4440629)
+	,('SF',25,5591360)
+	,('TB',27,4189181)
+	,('TEN',10,6120222)
+	,('WAS',28,3400000)
+
+
+	UPDATE #temp_cap_numbers
+		SET room  = room - ppe_adjustment
+	FROM #temp_team_ppes vc
+	WHERE #temp_cap_numbers.ClubID = vc.ClubID
+		AND season = (SELECT MAX(season) + 1 FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= league_year_start)
+
+			
+SELECT cl.Club_Code,cn.*
+	,RANK() OVER (PARTITION BY cn.Season ORDER BY Room DESC) AS cap_space_rank	
 FROM #temp_cap_numbers cn	
 INNER JOIN ProDB.dbo.Club cl	
 	ON cn.Season = cl.Season
 	AND cn.ClubID = cl.ClubID
-	where cn.season  = 2021
+where cn.season  = 2022
 ORDER BY Season	
 ,Club_Code
-
 
 
 
@@ -155,6 +260,35 @@ SELECT *
 FROM #temp_restructures_extensions
 WHERE nfl_player_id = 25511
 */
+
+
+
+
+
+SELECT co.*, cl.code
+FROM Analytics.dbo.analysis_players_contracts co
+inner join BaneProductionAnalytics.dbo.clubs cl
+	ON co.nfl_club_id = cl.nfl_club_id AND cl.is_disabled = 0 and cl.type = 'nfl'
+where first_contract_year = 2021
+and contract_has_void = 1
+and signing_date_next_contract is null
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
