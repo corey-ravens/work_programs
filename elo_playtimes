@@ -14,6 +14,8 @@ There are multiple levels to compare players at. From most granular to least:
 
 v5 is the last one that did special teams the smae was as regular
 v6 does special teams elo as just special teams snaps, it takes out roster/street/scratch 'wins'
+v7 was more up to date than 7
+v8 changes play type from unit to position group
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -28,8 +30,8 @@ OUTPUT TABLES:
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
-DECLARE @iSeason INT = 2018
-DECLARE @iWeek INT = 17
+DECLARE @current_season INT = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_gameweek_status WHERE season_type = 'REG')
+DECLARE @current_week INT = (SELECT MAX([week]) FROM Analytics.dbo.analysis_players_gameweek_status WHERE season_type = 'REG' AND season = @current_season)
 
 -- Check if #temp_players_gameweek_statuses exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
@@ -39,10 +41,10 @@ IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
 		,gs.season
 		,season_type
 		,[week]
-		,CASE WHEN nfl_game_key IS NULL THEN 999999 ELSE nfl_game_key END AS nfl_game_key
+		,nfl_game_key
 		,gs.status_roster_simple
 		,gs.club_id AS nfl_club_id
-		,CASE WHEN status_roster_simple	IN ('FREEAGENT') AND DATEDIFF(DAY,status_start_date,status_end_date) <= 365 THEN 1
+		,CASE WHEN status_roster_simple	IN ('FREEAGENT') AND DATEDIFF(DAY,status_start_date,nfl_game_week_begin) <= 365 THEN 1
 			WHEN status_roster_simple	IN ('PRACTICESQUAD','WAIVERS','WAIVEINJ') THEN 1 
 			ELSE 0 
 		END AS is_street
@@ -55,6 +57,7 @@ IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
 			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('OC','OG','OT','OL') THEN 'OL'
 			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DE','DT','NT','DL','OB','IB','RUSH','SAM') THEN 'FRONT7'
 			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DC','NB','CB','DS','SS','FS') THEN 'DB'
+			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('PK','K','PT','P','LS') THEN 'SP'
 			ELSE NULL
 		END AS position_group
 		,CASE WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('QB','RB','WR','TE','FB','KR','PR','OC','OG','OT','OL') THEN 'off'
@@ -77,8 +80,8 @@ IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
 	LEFT JOIN BaneProductionAnalytics.dbo.positions po
 		ON pl.position_id = po.id
 	WHERE gs.season_type = 'REG'
-		AND gs.season = @iSeason
-		AND gs.[week] = @iWeek
+		AND gs.season = @current_season
+		AND gs.[week] = @current_week
 		--AND cl.code = 'BLT'
 
 
@@ -161,6 +164,7 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 		,an.pff_play_id
 		,da.nfl_player_id
 		,'def' AS play_type
+		,position_group
 		,cl.code AS team
 		,cl.nfl_club_id AS nfl_club_id_play
 	INTO #temp_player_plays
@@ -177,6 +181,9 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 	INNER JOIN AnalyticsWork.dbo.rd_playfact aw
 		ON an.gsis_game_key = aw.GameKey
 		AND an.gsis_play_id = aw.PlayID
+	INNER JOIN #temp_players_gameweek_statuses gs
+		ON da.nfl_player_id = gs.nfl_player_id
+		AND gs.position_unit = 'def'
 	WHERE ty.is_qb_kneel = 0
 		AND an.gsis_game_key IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
 		AND WPstart BETWEEN 0.1 AND 0.99
@@ -188,6 +195,7 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 		,an.pff_play_id
 		,da.nfl_player_id
 		,'off' AS play_type
+		,position_group
 		,cl.code AS team
 		,cl.nfl_club_id AS nfl_club_id_play
 	FROM Analytics.dbo.stage_plays_play_ancillary an
@@ -203,6 +211,9 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 	INNER JOIN AnalyticsWork.dbo.rd_playfact aw
 		ON an.gsis_game_key = aw.GameKey
 		AND an.gsis_play_id = aw.PlayID
+	INNER JOIN #temp_players_gameweek_statuses gs
+		ON da.nfl_player_id = gs.nfl_player_id
+		AND gs.position_unit = 'off'
 	WHERE ty.is_qb_kneel = 0
 		AND an.gsis_game_key IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
 		AND WPstart BETWEEN 0.1 AND 0.99
@@ -214,6 +225,7 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 		,da.pff_PLAYID AS pff_play_id
 		,da.pff_GSISPLAYERID AS nfl_player_id
 		,'st' AS play_type
+		,position_group
 		,cl.code AS team
 		,cl.nfl_club_id AS nfl_club_id_play
 	FROM PFF.dbo.PFFSpecial da
@@ -222,9 +234,11 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
 		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.pff_TEAM END = cl.code
 		AND cl.is_disabled = 0
-	--AnalyticsWork.dbo.rd_playfact doesn't have WPStart for kickoffs, so we removed it for how (05/24/2020)
+	--AnalyticsWork.dbo.rd_playfact doesn't have WPStart for kickoffs, so we removed it for now (05/24/2020)
 	INNER JOIN PFF.dbo.PffPlays pl
 		ON da.pff_PLAYID = pl.pff_PLAYID
+	INNER JOIN #temp_players_gameweek_statuses gs
+		ON da.pff_GSISPLAYERID = gs.nfl_player_id
 	WHERE da.pff_GSISGAMEKEY IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
 		AND pl.pff_SPECIALTEAMSTYPE IN ('KICKOFF','PUNT')
 
@@ -250,12 +264,14 @@ IF OBJECT_ID('tempdb..#temp_play_counts') IS NOT NULL
 	SELECT nfl_game_key
 		,nfl_club_id_play
 		,play_type
+		,position_group
 		,COUNT(DISTINCT pff_play_id) AS play_count
 	INTO #temp_play_counts
 	FROM #temp_player_plays ta
 	GROUP BY nfl_game_key
 		,nfl_club_id_play
 		,play_type
+		,position_group
 
 
 -- Check if #temp_play_ids exists, if it does drop it
@@ -277,6 +293,7 @@ IF OBJECT_ID('tempdb..#temp_off_field') IS NOT NULL
 	SELECT pff_play_id
 		,nfl_club_id_play
 		,gs.nfl_player_id AS nfl_player_id
+		,gs.position_group
 	INTO #temp_off_field
 	FROM #temp_players_gameweek_statuses gs
 	INNER JOIN #temp_play_ids pid
@@ -305,10 +322,12 @@ IF OBJECT_ID('tempdb..#temp_on_vs_off_field') IS NOT NULL
 	INNER JOIN #temp_off_field mu
 		ON ta.pff_play_id = mu.pff_play_id
 		AND ta.nfl_club_id_play = mu.nfl_club_id_play
+		AND ta.position_group = mu.position_group
 	INNER JOIN #temp_play_counts pc
 		ON ta.nfl_game_key = pc.nfl_game_key
 		AND ta.nfl_club_id_play = pc.nfl_club_id_play
 		AND ta.play_type = pc.play_type
+		AND ta.position_group = pc.position_group
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -487,13 +506,14 @@ Analytics.dbo.analysis_players_elo_ratings_COREY
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
---DECLARE @aSeason INT = 2018
---DECLARE @aWeek INT = 17
-		
+	DELETE FROM Analytics.dbo.analysis_players_elo_ratings_COREY
+	WHERE season = @current_season
+		AND [week] = @current_week
+			
 	INSERT INTO Analytics.dbo.analysis_players_elo_ratings_COREY
 	SELECT rr.nfl_player_id
-		,@iSeason AS season
-		,@iWeek AS [week]
+		,@current_season AS season
+		,@current_week AS [week]
 		,rr.rating_type
 		,ISNULL(rr.rating_previous,0) + ISNULL(wl.elo_score,0) AS rating
 		,GETDATE() AS created_date
