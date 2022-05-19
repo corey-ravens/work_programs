@@ -9,9 +9,20 @@ v3 adds the weighted average snap grade
 
 v4 switched to a count of 6.3 and 6.0 and above players on the team at that position, EXCLUDING the given player.
 v5 switches to doing the modeling at the PLAY level instead of the season level.
+V6 IS A SLIGHT UPDATE TO V5. IF IT CHECKS OUT GO AHEAD AND RESET ITS NAME TO V5 AND OVERWIRTE THE OLD V5
 
-should you include games in the play time expectation calculation, or just do weighted average play time by team?
-the latter is so guys like adeboyejo who play one game don't have the same effect as guys who play in 16 games.
+
+
+need to change it so it only counts plays on his side of the ball
+for example marlon humphrey has 150ish plays per game because he has
+offensive play rows too. remove those so you only predicting likelihood of playing
+you sie of the ball plays.
+
+
+
+
+need to update r_output_play_player_currently_injured so that it has the updated position
+(so ST is replaced by a real position)
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -225,8 +236,7 @@ IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
 			WHEN pff_POSITION = 'H' THEN 'HO  ' 
 			ELSE CONCAT(LEFT(pff_position,2),'  ') 
 		END AS position_play
-		,'SPTEAM' AS position_pff_game
-		,WPstart AS win_pct_start
+		,CAST(-999 AS FLOAT) AS win_pct_start
 		,CASE WHEN LTRIM(RTRIM(UPPER(sp.pff_INJURED))) = 'Y' THEN 1 ELSE 0 END AS injured_on_play
 		,co.game_clock_counting_up_pff
 	INTO #temp_all_snaps
@@ -251,8 +261,7 @@ IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
 		,team
 		,'defense' AS snap_type	
 		,position_blt AS position_play
-		,position_pff_game
-		,WPstart AS win_pct_start
+		,1 - WPstart AS win_pct_start
 		,injured_on_play_pff
 		,co.game_clock_counting_up_pff
 	FROM Analytics.dbo.stage_plays_player_defensive_alignment da
@@ -276,7 +285,6 @@ IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
 		,team
 		,'offense' AS snap_type
 		,position_blt AS position_play
-		,position_pff_game
 		,WPstart AS win_pct_start
 		,injured_on_play_pff
 		,co.game_clock_counting_up_pff
@@ -290,6 +298,82 @@ IF OBJECT_ID('tempdb..#temp_all_snaps') IS NOT NULL
 		ON oa.pff_play_id = co.pff_play_id
 	WHERE an.season >= 2012
 		AND an.season_type = 'REG'
+
+	--Because you needed to set it as float, you filled in Spec Teams win pct with -999, here set them back to NULL
+	UPDATE #temp_all_snaps
+	SET win_pct_start = NULL
+	WHERE win_pct_start = -999
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Count up the snaps by position by game so you can get a player's game position.
+It will be the one where he plays the most snaps.
+
+OUTPUT TABLE:
+#temp_player_position_snaps
+#temp_player_position_snaps_ranks
+#temp_player_game_position
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_position_snaps exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_position_snaps') IS NOT NULL
+	DROP TABLE #temp_player_position_snaps
+
+	SELECT nfl_player_id
+		,pff_game_id
+		,season
+		,team
+		,CASE WHEN position_play IN ('LT','RT') THEN 'OT'
+			WHEN position_play IN ('LG','RG') THEN 'OG'			
+			WHEN position_play IN ('DT3T','NT') THEN 'DT'
+			WHEN position_play IN ('DE5T') THEN 'DE'
+			WHEN position_play IN ('MIKE','WILL','OB43') THEN 'IB'
+			WHEN position_play IN ('RUSH','SAM','OB34','DE43') THEN 'OB'
+			WHEN position_play IN ('NB') THEN 'CB'
+			WHEN position_play IN ('FS','SS') THEN 'DS'
+			WHEN snap_type = 'special teams' THEN 'ST'
+			ELSE position_play
+		END AS position_game
+		,SUM(CASE WHEN snap_type <> 'special teams' THEN 1 WHEN snap_type = 'special teams' THEN 0 ELSE NULL END) AS position_snaps
+	INTO #temp_player_position_snaps
+	FROM #temp_all_snaps
+	GROUP BY nfl_player_id
+		,pff_game_id
+		,season
+		,team
+		,CASE WHEN position_play IN ('LT','RT') THEN 'OT'
+			WHEN position_play IN ('LG','RG') THEN 'OG'			
+			WHEN position_play IN ('DT3T','NT') THEN 'DT'
+			WHEN position_play IN ('DE5T') THEN 'DE'
+			WHEN position_play IN ('MIKE','WILL','OB43') THEN 'IB'
+			WHEN position_play IN ('RUSH','SAM','OB34','DE43') THEN 'OB'
+			WHEN position_play IN ('NB') THEN 'CB'
+			WHEN position_play IN ('FS','SS') THEN 'DS'
+			WHEN snap_type = 'special teams' THEN 'ST'
+			ELSE position_play
+		END
+
+
+-- Check if #temp_player_position_snaps_ranks exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_position_snaps_ranks') IS NOT NULL
+	DROP TABLE #temp_player_position_snaps_ranks
+
+	SELECT *
+		,RANK() OVER (PARTITION BY nfl_player_id, pff_game_id ORDER BY position_snaps DESC, position_game) AS position_snaps_rank
+	INTO #temp_player_position_snaps_ranks
+	FROM #temp_player_position_snaps
+
+
+-- Check if #temp_player_game_position exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_game_position') IS NOT NULL
+	DROP TABLE #temp_player_game_position
+
+	SELECT *
+	INTO #temp_player_game_position
+	FROM #temp_player_position_snaps_ranks
+	WHERE position_snaps_rank = 1
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -363,30 +447,130 @@ IF OBJECT_ID('tempdb..#temp_games_plays_players_injuries') IS NOT NULL
 		,gpp.pff_play_id
 		,gpp.game_clock_counting_up_pff
 		,gpp.nfl_player_id
-		,season
-		,asn.team
-		,asn.position_play
-		,asn.position_pff_game
 		,CASE WHEN asn.nfl_player_id IS NOT NULL THEN 1 ELSE 0 END AS active_play
 		,CASE WHEN asn.injured_on_play = 1 THEN 1 ELSE 0 END AS injured_on_play
+		,po.season
+		,po.team
+		,po.position_game
 	INTO #temp_games_plays_players_injuries
 	FROM #temp_games_plays_players gpp
 	LEFT JOIN #temp_all_snaps asn
 		ON gpp.pff_game_id = asn.pff_game_id
 		AND gpp.pff_play_id = asn.pff_play_id
 		AND gpp.nfl_player_id = asn.nfl_player_id
+	LEFT JOIN #temp_player_game_position po
+		ON gpp.nfl_player_id = po.nfl_player_id
+		AND gpp.pff_game_id = po.pff_game_id
 
-/*
+DROP TABLE #temp_games_plays_players
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find a season position to fill in when game position is 'special teams'
+
+OUTPUT TABLE:
+#temp_season_position_o_d
+#temp_season_position_rank
+#temp_season_position
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_season_position_o_d exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_season_position_o_d') IS NOT NULL
+	DROP TABLE #temp_season_position_o_d
+
+	SELECT nfl_player_id
+		,season
+		,position_blt
+		,snap_count_all
+	INTO #temp_season_position_o_d
+	FROM Analytics.dbo.analysis_players_season_position_defense
+	WHERE defense_type = 'ALL'
+		AND season_type_adjusted = 'REGPOST'
+
+	INSERT INTO #temp_season_position_o_d
+	SELECT nfl_player_id
+		,season
+		,position_blt
+		,snap_count_all
+	FROM Analytics.dbo.analysis_players_season_position_offense
+	WHERE season_type_adjusted = 'REGPOST'
+
+
+-- Check if #temp_season_position_rank exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_season_position_rank') IS NOT NULL
+	DROP TABLE #temp_season_position_rank
+
 	SELECT *
-	--INTO Analytics.dbo.work_r_input_injury_loop
-	FROM #temp_all_snaps
-	--WHERE nfl_player_id = 
-		--AND pff_game_id = 
-	ORDER BY nfl_player_id, pff_game_id, game_clock_counting_up_pff
-*/
+		,RANK() OVER (PARTITION BY nfl_player_id, season ORDER BY snap_count_all DESC, position_blt) AS position_rank
+	INTO #temp_season_position_rank
+	FROM #temp_season_position_o_d
+
+
+-- Check if #temp_season_position exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_season_position') IS NOT NULL
+	DROP TABLE #temp_season_position
+
+	SELECT nfl_player_id
+		,season
+		,CASE WHEN position_blt IN ('LOT','ROT') THEN 'OT'
+			WHEN position_blt IN ('LOG','ROG') THEN 'OG'			
+			WHEN position_blt IN ('DT3T','NT') THEN 'DT'
+			WHEN position_blt IN ('DE5T') THEN 'DE'
+			WHEN position_blt IN ('MIKE','WILL','OB43') THEN 'IB'
+			WHEN position_blt IN ('RUSH','SAM','OB34','DE43') THEN 'OB'
+			WHEN position_blt IN ('NB') THEN 'CB'
+			WHEN position_blt IN ('FS','SS') THEN 'DS'
+			ELSE position_blt
+		END AS position_blt
+	INTO #temp_season_position
+	FROM #temp_season_position_rank rk
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Replace any positions that are marked as special teams with their season position.
+Or if that is missing, then their Bane position.
+
+OUTPUT TABLE:
+#temp_games_plays_players_injuries_pos
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_games_plays_players_injuries_pos exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_games_plays_players_injuries_pos') IS NOT NULL
+	DROP TABLE #temp_games_plays_players_injuries_pos
+
+	SELECT pff_game_id
+		,pff_play_id
+		,game_clock_counting_up_pff
+		,gp.nfl_player_id
+		,active_play
+		,injured_on_play
+		,gp.season
+		,gp.team
+		,CASE WHEN position_game = 'ST' THEN COALESCE(position_blt,pn.translation,position_game)
+			ELSE position_game 
+		END AS position_game
+	INTO #temp_games_plays_players_injuries_pos
+	FROM #temp_games_plays_players_injuries gp
+	LEFT JOIN #temp_season_position po
+		ON gp.nfl_player_id = po.nfl_player_id
+		AND gp.season = po.season
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON gp.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.positions pn
+		ON pl.position_id = pn.id
+
+DROP TABLE #temp_games_plays_players_injuries		
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+INSERT INTO Analytics.dbo.work_r_input_injury_loop
+SELECT *
+FROM #temp_games_plays_players_injuries_pos
+
 
 RUN THE R PROGRAM
 X:\R\pro_scouting\injury_loop
@@ -409,74 +593,264 @@ IF OBJECT_ID('tempdb..#temp_currently_injured_with_grades') IS NOT NULL
 	DROP TABLE #temp_currently_injured_with_grades
 
 	SELECT ci.*
-		,season
-		,team
-		,position_play
-		,position_pff_game
+		,CASE WHEN pgc.grade_bucket < 5.7 THEN 5.7
+			ELSE ISNULL(pgc.grade_bucket,5.7)
+		END AS grade_bucket
 	INTO #temp_currently_injured_with_grades
 	FROM Analytics.dbo.r_output_play_player_currently_injured ci
-	INNER JOIN #temp_games_plays_players_injuries gp
-		ON ci.nfl_player_id = gp.nfl_player_id
-		AND ci.pff_game_id = gp.pff_game_id
-		AND ci.pff_play_id = gp.pff_play_id
-	
-
-
-
-	Analytics.dbo.analysis_players_pro_grades	pgc
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgc
 		ON ci.nfl_player_id = pgc.nfl_player_id
 		AND ci.season = pgc.report_season
 		AND pgc.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_grades)
+
+ALTER TABLE #temp_currently_injured_with_grades ADD grade_count_60 INT
+ALTER TABLE #temp_currently_injured_with_grades ADD grade_count_60_up INT
+ALTER TABLE #temp_currently_injured_with_grades ADD grade_count_63_up INT
 		
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Count up the number of players at 6.0 and 6.3 and above by team and position for each play, excluding the
-target player.
+Count up the number of players at 6.0 and 6.3 by team and position for each play, excluding the target player.
+You do a few of these separately to speed up processing.  Join the data to the main table right away so
+you can drop the temp table.
 
-OUTPUT TABLE:
-#temp_team_position_grade_counts
+DROPPED TABLE:
+#temp_play_grade_counts_60
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_team_position_grade_counts exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_team_position_grade_counts') IS NOT NULL
-	DROP TABLE #temp_team_position_grade_counts
+-- Check if #temp_play_grade_counts_60 exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_grade_counts_60') IS NOT NULL
+	DROP TABLE #temp_play_grade_counts_60
 
 	SELECT pg.nfl_player_id
-		,report_season AS season
-		,pg.nfl_club_id
-		,(SELECT COUNT(DISTINCT nfl_player_id) FROM #temp_grades_with_team pg2 WHERE pg.report_season = pg2.report_season  AND pg.nfl_club_id = pg2.nfl_club_id AND pg.position = pg2.position AND pg.bane_player_id <> pg2.bane_player_id AND pg2.grade_bucket >= 6.0) AS grade_count_60_up
-		,(SELECT COUNT(DISTINCT nfl_player_id) FROM #temp_grades_with_team pg2 WHERE pg.report_season = pg2.report_season  AND pg.nfl_club_id = pg2.nfl_club_id AND pg.position = pg2.position AND pg.bane_player_id <> pg2.bane_player_id AND pg2.grade_bucket >= 6.3) AS grade_count_63_up
-	INTO #temp_team_position_grade_counts
-	FROM #temp_grades_with_team pg
+		,pg.pff_game_id
+		,pg.pff_play_id
+		,COUNT(pg2.nfl_player_id) AS grade_count_60
+	INTO #temp_play_grade_counts_60
+	FROM #temp_currently_injured_with_grades pg 
+	INNER JOIN #temp_currently_injured_with_grades pg2 
+		ON pg.pff_game_id = pg2.pff_game_id 
+		AND pg.pff_play_id = pg2.pff_play_id
+		AND pg.team = pg2.team 
+		AND pg.position_game = pg2.position_game
+		AND pg.nfl_player_id <> pg2.nfl_player_id 
+		AND pg2.currently_injured = 0
+		AND pg2.grade_bucket IN (6.0,6.1)
+	GROUP BY pg.nfl_player_id
+		,pg.pff_game_id
+		,pg.pff_play_id
+
+	UPDATE ci
+	SET ci.grade_count_60 = COALESCE(gc.grade_count_60,0)
+	FROM #temp_currently_injured_with_grades ci 
+	INNER JOIN #temp_play_grade_counts_60 gc
+		ON ci.nfl_player_id = gc.nfl_player_id
+		AND ci.pff_game_id = gc.pff_game_id
+		AND ci.pff_play_id = gc.pff_play_id
+
+	DROP TABLE #temp_play_grade_counts_60
+
+	UPDATE #temp_currently_injured_with_grades
+	SET grade_count_60 = 0
+	WHERE grade_count_60 IS NULL
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Join the team position grade counts to the play time table.
+Count up the number of players at 6.0 and 6.3 by team and position for each play, excluding the target player.
+You do a few of these separately to speed up processing.  Join the data to the main table right away so
+you can drop the temp table.
 
-OUTPUT TABLE:
-#temp_player_play_time_with_grade_count
+DROPPED TABLE:
+#temp_play_grade_counts_60_up
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
--- Check if #temp_player_play_time_with_grade_count exists, if it does drop it
-IF OBJECT_ID('tempdb..#temp_player_play_time_with_grade_count') IS NOT NULL
-	DROP TABLE #temp_player_play_time_with_grade_count
+-- Check if #temp_play_grade_counts_60_up exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_grade_counts_60_up') IS NOT NULL
+	DROP TABLE #temp_play_grade_counts_60_up
 
-	SELECT pt.*
-		,grade_count_60_up
-		,grade_count_63_up
-	INTO #temp_player_play_time_with_grade_count
-	FROM #temp_player_play_time pt
-	LEFT JOIN #temp_team_position_grade_counts tc
-		ON pt.nfl_player_id = tc.nfl_player_id
-		AND pt.season = tc.season
-		AND pt.nfl_club_id = tc.nfl_club_id
+	SELECT pg.nfl_player_id
+		,pg.pff_game_id
+		,pg.pff_play_id
+		,COUNT(pg2.nfl_player_id) AS grade_count_60_up
+	INTO #temp_play_grade_counts_60_up
+	FROM #temp_currently_injured_with_grades pg 
+	INNER JOIN #temp_currently_injured_with_grades pg2 
+		ON pg.pff_game_id = pg2.pff_game_id 
+		AND pg.pff_play_id = pg2.pff_play_id
+		AND pg.team = pg2.team 
+		AND pg.position_game = pg2.position_game
+		AND pg.nfl_player_id <> pg2.nfl_player_id 
+		AND pg2.currently_injured = 0
+		AND pg2.grade_bucket >= 6.0
+	GROUP BY pg.nfl_player_id
+		,pg.pff_game_id
+		,pg.pff_play_id
+
+	UPDATE ci
+	SET ci.grade_count_60_up = COALESCE(gc.grade_count_60_up,0)
+	FROM #temp_currently_injured_with_grades ci 
+	INNER JOIN #temp_play_grade_counts_60_up gc
+		ON ci.nfl_player_id = gc.nfl_player_id
+		AND ci.pff_game_id = gc.pff_game_id
+		AND ci.pff_play_id = gc.pff_play_id
+
+	DROP TABLE #temp_play_grade_counts_60_up
+
+	UPDATE #temp_currently_injured_with_grades
+	SET grade_count_60_up = 0
+	WHERE grade_count_60_up IS NULL
 
 
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+Count up the number of players at 6.0 and 6.3 by team and position for each play, excluding the target player.
+You do a few of these separately to speed up processing.  Join the data to the main table right away so
+you can drop the temp table.
+
+DROPPED TABLE:
+#temp_play_grade_counts_63_up
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_play_grade_counts_63_up exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_grade_counts_63_up') IS NOT NULL
+	DROP TABLE #temp_play_grade_counts_63_up
+
+	SELECT pg.nfl_player_id
+		,pg.pff_game_id
+		,pg.pff_play_id
+		,COUNT(pg2.nfl_player_id) AS grade_count_63_up
+	INTO #temp_play_grade_counts_63_up
+	FROM #temp_currently_injured_with_grades pg 
+	INNER JOIN #temp_currently_injured_with_grades pg2 
+		ON pg.pff_game_id = pg2.pff_game_id 
+		AND pg.pff_play_id = pg2.pff_play_id
+		AND pg.team = pg2.team 
+		AND pg.position_game = pg2.position_game
+		AND pg.nfl_player_id <> pg2.nfl_player_id 
+		AND pg2.currently_injured = 0
+		AND pg2.grade_bucket >= 6.3
+	GROUP BY pg.nfl_player_id
+		,pg.pff_game_id
+		,pg.pff_play_id
+
+	UPDATE ci
+	SET ci.grade_count_63_up = COALESCE(gc.grade_count_63_up,0)
+	FROM #temp_currently_injured_with_grades ci 
+	INNER JOIN #temp_play_grade_counts_63_up gc
+		ON ci.nfl_player_id = gc.nfl_player_id
+		AND ci.pff_game_id = gc.pff_game_id
+		AND ci.pff_play_id = gc.pff_play_id
+
+	DROP TABLE #temp_play_grade_counts_63_up
+
+	UPDATE #temp_currently_injured_with_grades
+	SET grade_count_63_up = 0
+	WHERE grade_count_63_up IS NULL
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the grade counts from the previous step to the currently injured with grades table.
+
+OUTPUT TABLE:
+#temp_play_grade_counts
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_play_grade_counts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_grade_counts') IS NOT NULL
+	DROP TABLE #temp_play_grade_counts
+
+	SELECT *
+	INTO Analytics.dbo.work_player_play_grade_counts
+	FROM #temp_currently_injured_with_grades pg
+
+	DROP TABLE #temp_currently_injured_with_grades
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Filter it out so it is only players in their first 4 seasons in the data set and join 
+in the player identifying info.
+
+OUTPUT TABLE:
+#temp_play_grade_counts_filtered
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_play_grade_counts_filtered exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_grade_counts_filtered') IS NOT NULL
+	DROP TABLE #temp_play_grade_counts_filtered
+
+	SELECT gc.*
+		,pl.draft_round
+		,pl.legacy_grade
+		,pl.nfl_entry_club_id_not_bane
+		,pl.nfl_entry_year
+		,pl.position AS draft_position
+		,pl.on_53
+		,gc.season - pl.nfl_entry_year + 1 AS season_in_league
+	INTO #temp_play_grade_counts_filtered
+	FROM Analytics.dbo.work_player_play_grade_counts gc
+	INNER JOIN #temp_player_list pl
+		ON gc.nfl_player_id = pl.nfl_player_id
+	WHERE gc.season <= pl.nfl_entry_year + 3
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table of win probabaility by play.
+
+OUTPUT TABLE:
+#temp_win_prob
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_win_prob exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_win_prob') IS NOT NULL
+	DROP TABLE #temp_win_prob
+
+	SELECT DISTINCT pff_game_id
+		,pff_play_id
+		,team
+		,win_pct_start
+	INTO #temp_win_prob
+	FROM #temp_all_snaps
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join back in the win probability column from the all snaps table
+
+OUTPUT TABLE:
+#temp_play_grade_counts_win_prob
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_play_grade_counts_win_prob exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_grade_counts_win_prob') IS NOT NULL
+	DROP TABLE #temp_play_grade_counts_win_prob
+
+	SELECT gf.*
+		,win_pct_start
+	INTO #temp_play_grade_counts_win_prob
+	FROM #temp_play_grade_counts_filtered gf
+	INNER JOIN #temp_win_prob wp
+		ON gf.pff_game_id = wp.pff_game_id
+		AND gf.pff_play_id = wp.pff_play_id
+		AND gf.team = wp.team
+
+DROP TABLE #temp_play_grade_counts_filtered
+DROP TABLE #temp_all_snaps
+
+
+SELECT * 
+FROM #temp_play_grade_counts_win_prob
+WHERE nfl_player_id = 44828
 --TRUNCATE TABLE Analytics.dbo.work_r_input_young_players_snap_pct
 --INSERT INTO Analytics.dbo.work_r_input_young_players_snap_pct
 
