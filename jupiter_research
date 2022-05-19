@@ -1,0 +1,505 @@
+
+
+
+
+
+
+
+	
+	
+	
+	
+
+select *
+from ClubDB.dbo.calendar
+where season between 2011 and 2021
+and Description = 'Waiver System Begins for Next Season'
+
+	
+	
+	
+	
+	
+-- Check if #temp_cap_numbers exists, if it does drop it	
+IF OBJECT_ID('tempdb..#temp_cap_numbers') IS NOT NULL	
+	DROP TABLE #temp_cap_numbers
+	
+CREATE TABLE #temp_cap_numbers	
+(	
+Season INT	
+,ClubID INT	
+,AllowedCap FLOAT	
+,Top51Cap FLOAT	
+,Room FLOAT	
+,PreviousCap FLOAT	
+,Change FLOAT	
+,NumPlayers INT	
+,SB FLOAT	
+,Para5 FLOAT	
+,LTBE FLOAT	
+,Misc FLOAT	
+,dtLoadDate DATE	
+,CurCap FLOAT
+,LeagueCap FLOAT	
+,CAM FLOAT	
+,ClubAdjustment FLOAT	
+,ReAllocation FLOAT	
+,VetCapCredit FLOAT	
+,CarryOver FLOAT	
+,OffSeasonHold FLOAT	
+)	
+	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2012,2012,N'2012-02-06'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2013,2013,N'2013-02-04'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2014,2014,N'2014-02-03'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2015,2015,N'2015-02-02'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2016,2016,N'2016-02-08'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2017,2017,N'2017-02-06'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2018,2018,N'2018-02-05'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2019,2019,N'2019-02-04'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2020,2020,N'2020-02-03'	
+INSERT INTO #temp_cap_numbers EXEC ClubDB.dbo.SalaryCapViewsLeagueTop51 2021,2021,N'2021-02-08'	
+	
+	
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 225000 WHERE season = 2012
+UPDATE #temp_cap_numbers SET Room = Room + 225000 WHERE season = 2012
+UPDATE #temp_cap_numbers SET LeagueCap = 120600000 WHERE season = 2012
+	
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 2400000 WHERE season = 2013
+UPDATE #temp_cap_numbers SET Room = Room + 2400000 WHERE season = 2013
+UPDATE #temp_cap_numbers SET LeagueCap = 123000000 WHERE season = 2013	
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10000000 WHERE season = 2014
+UPDATE #temp_cap_numbers SET Room = Room + 10000000 WHERE season = 2014
+UPDATE #temp_cap_numbers SET LeagueCap = 133000000 WHERE season = 2014	
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10280000 WHERE season = 2015
+UPDATE #temp_cap_numbers SET Room = Room + 10280000 WHERE season = 2015
+UPDATE #temp_cap_numbers SET LeagueCap = 143280000 WHERE season = 2015
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 11990000 WHERE season = 2016
+UPDATE #temp_cap_numbers SET Room = Room + 11990000 WHERE season = 2016
+UPDATE #temp_cap_numbers SET LeagueCap = 155270000 WHERE season = 2016
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 11730000 WHERE season = 2017
+UPDATE #temp_cap_numbers SET Room = Room + 11730000 WHERE season = 2017
+UPDATE #temp_cap_numbers SET LeagueCap = 167000000 WHERE season = 2017
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10200000 WHERE season = 2018
+UPDATE #temp_cap_numbers SET Room = Room + 10200000 WHERE season = 2018
+UPDATE #temp_cap_numbers SET LeagueCap = 177200000 WHERE season = 2018
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 11000000 WHERE season = 2019
+UPDATE #temp_cap_numbers SET Room = Room + 11000000 WHERE season = 2019
+UPDATE #temp_cap_numbers SET LeagueCap = 188200000 WHERE season = 2019
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap + 10000000 WHERE season = 2020
+UPDATE #temp_cap_numbers SET Room = Room + 10000000 WHERE season = 2020
+UPDATE #temp_cap_numbers SET LeagueCap = 198200000 WHERE season = 2020
+
+
+UPDATE #temp_cap_numbers SET AllowedCap = AllowedCap - 18200000 WHERE season = 2021
+UPDATE #temp_cap_numbers SET Room = Room - 18200000 - 792000 WHERE season = 2021
+UPDATE #temp_cap_numbers SET LeagueCap = 180000000 WHERE season = 2021
+
+
+	
+SELECT cl.Club_Code,cn.*	
+FROM #temp_cap_numbers cn	
+INNER JOIN ProDB.dbo.Club cl	
+	ON cn.Season = cl.Season
+	AND cn.ClubID = cl.ClubID
+	where cn.season  = 2021
+ORDER BY Season	
+,Club_Code
+
+
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table of all the contract restructures / extensions.
+
+OUTPUT TABLES:
+#temp_restructures_extensions
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_restructures_extensions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_restructures_extensions') IS NOT NULL
+	DROP TABLE #temp_restructures_extensions
+
+	SELECT transid AS transaction_id
+		,PlayerID AS nfl_player_id
+		,tt.Season AS season
+		,Transactiondate AS transaction_date
+		,TransactionDesc AS transaction_description
+		,TransactionDescAbbr AS transaction_abbreviation
+		,ClubID AS nfl_club_id
+		,Club_Code AS nfl_club_code
+	INTO #temp_restructures_extensions
+	FROM ProDB.dbo.TransactionTable tt
+	LEFT JOIN ProDB.DBO.Club cl
+		ON tt.StartClubFullName = cl.Club_Name
+		AND tt.season = cl.season
+	WHERE tt.LeagueType = 'NFL'
+		AND tt.season >= 2011
+		AND TransStatus <> 50
+		AND MONTH(Transactiondate) IN (2,3,4,5,6)
+		AND TransactionDescAbbr IN ('FA08')
+
+/*
+SELECT *
+FROM #temp_restructures_extensions
+WHERE nfl_player_id = 25511
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table of all the cuts and trades.
+
+OUTPUT TABLES:
+#temp_cuts_and_trades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_cuts_and_trades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cuts_and_trades') IS NOT NULL
+	DROP TABLE #temp_cuts_and_trades
+
+	SELECT transid AS transaction_id
+		,PlayerID AS nfl_player_id
+		,tt.Season AS season
+		,Transactiondate AS transaction_date
+		,TransactionDesc AS transaction_description
+		,TransactionDescAbbr AS transaction_abbreviation
+		,ClubID AS nfl_club_id
+		,Club_Code AS nfl_club_code
+	INTO #temp_cuts_and_trades
+	FROM ProDB.dbo.TransactionTable tt
+	INNER JOIN ProDB.DBO.Club cl
+		ON tt.StartClubFullName = cl.Club_Name
+		AND tt.season = cl.season
+	WHERE tt.LeagueType = 'NFL'
+		AND tt.season >= 2011
+		AND TransStatus <> 50
+		AND MONTH(Transactiondate) IN (2,3,4,5,6)
+		AND (TransactionDescAbbr LIKE 'RL%' OR TransactionDescAbbr IN ('TR01','T01','TE01','TE02'))
+
+/*
+SELECT *
+FROM #temp_cuts_and_trades
+WHERE nfl_player_id = 34459
+ORDER BY nfl_club_id, season
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the extensions and the cuts/trades to the Cap / Cash table
+
+OUTPUT TABLES:
+#temp_cap_cash_cut
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_league_dates exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_league_dates') IS NOT NULL
+	DROP TABLE #temp_league_dates
+
+SELECT c1.season	
+	,c1.calendardate AS league_year_start_date
+	,c2.calendardate AS previous_year_end_date
+INTO #temp_league_dates
+FROM ClubDB.dbo.calendar c1	
+INNER JOIN ClubDB.dbo.calendar c2	
+	ON c1.season = c2.season + 1
+	AND c2.[Description] = 'End Regular Season'
+WHERE c1.[Description] = 'First Day of League Year'	
+	AND c1.season BETWEEN 2012 AND 2021
+
+
+-- Check if #temp_cap_cash_cut exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cap_cash_cut') IS NOT NULL
+	DROP TABLE #temp_cap_cash_cut
+
+	SELECT cap.*
+		,COALESCE(re.transaction_date,ct.transaction_date) AS transaction_date
+		,COALESCE(re.transaction_abbreviation,ct.transaction_abbreviation) AS transaction_abbreviation
+		,ABS(DATEDIFF(DD,from_date,league_year_start_date)) AS days_from_league_year_start
+		,CASE WHEN (ct.transaction_abbreviation LIKE 'RL%' OR ct.transaction_abbreviation IN ('TR01','T01','TE01','TE02')) AND cap.season > YEAR(ct.transaction_date) THEN 1 ELSE 0 END AS future_dead_season_flag
+	INTO #temp_cap_cash_cut
+	FROM Analytics.dbo.analysis_players_salary_cap cap
+	INNER JOIN #temp_league_dates ld
+		ON cap.season = ld.season
+	LEFT JOIN #temp_restructures_extensions re
+		ON cap.nfl_player_id = re.nfl_player_id
+		AND cap.nfl_club_id = re.nfl_club_id
+		AND DATEADD(DD,-1,re.transaction_date) = COALESCE(cap.to_date,'12/31/2099')
+		AND cap.season = YEAR(re.transaction_date)
+	LEFT JOIN #temp_cuts_and_trades ct
+		ON cap.nfl_player_id = ct.nfl_player_id
+		AND cap.nfl_club_id = ct.nfl_club_id
+		AND DATEADD(DD,-1,ct.transaction_date) <= COALESCE(cap.to_date,'12/31/2099')
+		AND DATEADD(DD,-1,ct.transaction_date) >= cap.from_date 
+		AND cap.season >= YEAR(ct.transaction_date)
+	WHERE COALESCE(re.transaction_date,ct.transaction_date) BETWEEN ld.previous_year_end_date AND league_year_start_date
+
+
+
+-- Check if #temp_cap_cash_cut_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cap_cash_cut_order') IS NOT NULL
+	DROP TABLE #temp_cap_cash_cut_order 
+
+	SELECT *
+		,RANK() OVER (PARTITION BY nfl_player_id, season, nfl_club_id ORDER BY days_from_league_year_start, from_date, dead_cap, cap_amount, nfl_club_id) 
+		+ CASE WHEN transaction_abbreviation IN ('FA08') THEN 1000
+				WHEN transaction_abbreviation IS NOT NULL THEN 0 
+				ELSE 2000
+		END AS cap_order
+		,CASE WHEN transaction_abbreviation IN ('RL15','RL16') THEN 1 ELSE 0 END AS post_june_1_cut
+	--INTO #temp_cap_cash_cut_order
+	FROM #temp_cap_cash_cut
+	WHERE 1=1
+		AND future_dead_season_flag = 0
+	ORDER BY nfl_player_id
+		,nfl_club_id
+		,season
+		,days_from_league_year_start
+
+
+
+
+-- Check if #temp_recent_pro_grade exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_recent_pro_grade') IS NOT NULL
+	DROP TABLE #temp_recent_pro_grade
+
+		SELECT re.player_id AS bane_player_id
+		,re.created_at	
+		,MAX(CAST(gr.[value] AS NUMERIC(3,1))) AS pro_grade
+	INTO #temp_recent_pro_grade
+	FROM [BaneProductionAnalytics].dbo.reports re
+	LEFT JOIN [BaneProductionAnalytics].dbo.grades gr
+		ON re.grade_id = gr.id
+	WHERE re.[type] IN ('ability for ravens','game advance','quarterly')
+		AND re.created_at = (SELECT MAX(created_at) FROM [BaneProductionAnalytics].dbo.reports re2 WHERE re2.player_id = re.player_id and re2.[type] IN ('ability for ravens','game advance','quarterly') AND re2.grade_id IS NOT NULL AND re.is_deleted = 0) 
+		AND re.is_deleted = 0
+	GROUP BY re.player_id
+		,re.created_at
+
+
+
+		select sc.player
+		,po.translation
+			,cl.code
+			,room
+			,cap_amount
+			,cap_savings
+			,dead_cap
+			,cap_savings_post_june_1
+			,dead_cap_post_june_1
+			,pg.pro_grade
+			,signing_type
+		from Analytics.dbo.analysis_players_salary_cap sc
+		INner join BaneProductionAnalytics.dbo.players pl
+			ON sc.nfl_player_id = pl.nfl_id
+			AND pl.is_deleted = 0
+		inner join BaneProductionAnalytics.dbo.clubs cl
+			ON sc.nfl_club_id = cl.nfl_club_id
+			AND cl.is_disabled = 0
+		left join BaneProductionAnalytics.dbo.positions po
+			ON pl.position_id = po.id
+		left join #temp_cap_numbers cn
+			ON sc.nfl_club_id = cn.ClubID
+			AND cn.season = 2021
+		left join #temp_recent_pro_grade pg
+			ON pl.id = pg.bane_player_id
+		left join Analytics.dbo.analysis_players_contracts co
+			ON sc.nfl_player_id = co.nfl_player_id
+			AND co.effective_contract = 1
+		where sc.season = 2021
+			and sc.active_row = 1
+
+
+
+
+
+
+
+
+
+-- Check if #temp_snaps exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_snaps') IS NOT NULL
+	DROP TABLE #temp_snaps
+
+	SELECT oa.nfl_player_id
+		,is_run
+		,is_pass
+		,COUNT(*) AS snaps
+	into #temp_snaps
+	FROM Analytics.dbo.stage_plays_player_offensive_alignment oa
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON oa.pff_play_id = an.pff_play_id
+	INNER JOIN Analytics.dbo.stage_plays_play_type ty
+		ON an.pff_play_id = ty.pff_play_id
+	WHERE season = 2020
+		AND season_type_adjusted = 'REGPOST'
+	GROUP BY oa.nfl_player_id
+		,is_run
+		,is_pass
+
+
+
+
+	SELECT player
+		,cl.code
+		,sp.snaps + sr.snaps AS snaps
+		,sp.snaps AS pass_snaps
+		,sr.snaps AS run_snaps
+		,snap_pct_wide
+		,snap_pct_slot
+		,re.play_count_route_sum
+		--,re.play_count_slot_sum
+		,re.receiving_epa_sum / CAST(re.play_count_route_sum AS FLOAT) AS epa_per_route
+		,re.receiving_yards_sum / CAST(re.play_count_route_sum AS FLOAT) AS yards_per_route 
+		,re.receiving_air_yards_sum / CAST(re.target_sum AS FLOAT) AS depth_of_target
+		,po.translation
+	FROM Analytics.dbo.r_input_stats_receiving re
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON re.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON pl.current_club_id = cl.id
+		AND cl.is_disabled = 0
+	LEFT JOIN #temp_snaps sp
+		ON re.nfl_player_id = sp.nfl_player_id
+		AND sp.is_pass = 1
+	LEFT JOIN #temp_snaps sr
+		ON re.nfl_player_id = sr.nfl_player_id
+		AND sr.is_run = 1
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE re.season = 2020
+		AND season_type_adjusted = 'REGPOST'
+		AND rolling_game_stats = 0
+		AND target_sum > 0
+	order by play_count_route_sum DESC
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the free agency waves
+
+OUTPUT TABLES:
+#temp_cap_cash_cut
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_league_dates exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_league_dates') IS NOT NULL
+	DROP TABLE #temp_league_dates
+
+SELECT c1.season	
+	,c1.calendardate AS league_year_start_date
+	,c2.calendardate AS previous_year_end_date
+INTO #temp_league_dates
+FROM ClubDB.dbo.calendar c1	
+INNER JOIN ClubDB.dbo.calendar c2	
+	ON c1.season = c2.season + 1
+	AND c2.[Description] = 'End Regular Season'
+WHERE c1.[Description] = 'First Day of League Year'	
+	AND c1.season BETWEEN 2012 AND 2021
+
+
+
+SELECT DATEDIFF(D,league_year_start_date,signing_date) AS signing_difference
+	,league_year_start_date
+	,signing_date
+	,po.translation
+	,player
+	,cl.code AS club
+	,first_contract_year
+	,true_average_per_year
+	,true_apy_percent_of_cap
+	,total_package_amount
+	,true_years
+	,gr.grade_bucket
+	,co.*
+FROM Analytics.dbo.analysis_players_contracts co
+LEFT JOIN #temp_league_dates ld
+	ON co.first_contract_year = ld.season
+INNER JOIN BaneProductionAnalytics.dbo.players pl
+	ON co.nfl_player_id = pl.nfl_id
+	AND pl.is_deleted = 0
+LEFT JOIN BaneProductionAnalytics.dbo.positions po
+	ON pl.position_id = po.id
+LEFT JOIN Analytics.dbo.analysis_players_pro_grades gr
+	ON pl.id = gr.bane_player_id
+	AND co.first_contract_year = gr.report_season + 1
+	AND gr.created_date = (SELECT MAX(created_date) FROM Analytics.dbo.analysis_players_pro_grades)
+LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+	ON co.nfl_club_id = cl.nfl_club_id
+	AND cl.is_disabled = 0
+where season >= 2012
+and signing_type LIKE 'UFA%'
+order by co.true_apy_percent_of_cap desc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- Check if #temp_league_dates exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_league_dates') IS NOT NULL
+	DROP TABLE #temp_league_dates
+
+SELECT c1.season	
+	,c1.calendardate AS league_year_start_date
+	,c2.calendardate AS previous_year_end_date
+INTO #temp_league_dates
+FROM ClubDB.dbo.calendar c1	
+INNER JOIN ClubDB.dbo.calendar c2	
+	ON c1.season = c2.season + 1
+	AND c2.[Description] = 'End Regular Season'
+WHERE c1.[Description] = 'First Day of League Year'	
+	AND c1.season BETWEEN 2012 AND 2021
+
+
+
+select *
+from analytics.dbo.analysis_players_contracts co
+INNER JOIN #temp_league_dates ld
+	ON co.first_contract_year = ld.season
+where first_contract_year >= 2012
+and signing_type in ('FA-D','FA-S','UFA-D','UFA-S','Extension')
+and signing_date between previous_year_end_date and DATEADD(DAY, 7,league_year_start_date)
