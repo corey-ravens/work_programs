@@ -1,0 +1,475 @@
+
+
+
+
+
+
+
+
+
+
+DECLARE @iSeason INT
+SELECT @iSeason = 2017
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with all players on a roster by team and season.  This is used to see if a player was still
+on the team the next year after going on IR.
+
+OUTPUT TABLES:
+#temp_roster_players
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_roster_players exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_roster_players') IS NOT NULL
+	DROP TABLE #temp_roster_players
+
+	SELECT DISTINCT nfl_player_id
+		,season
+		,club_id AS nfl_club_id
+	INTO #temp_roster_players
+	FROM Analytics.dbo.analysis_players_gameweek_status gs
+	WHERE season >= 2012
+		AND UPPER(season_type) = 'REG'
+		AND status_roster_simple IN ('ACTIVE','INACTIVE','INJURED','PUP')
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with playtime by season and season type.  This is to show if a player played the 
+year before going on IR (because if they have playtime they're likely not a stash), as well as
+to see if they played at all the same season's preseason (because if they didn't play at all,
+they likely got hurt during camp and aren't a "stash").
+
+OUTPUT TABLES:
+#temp_play_times
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_play_times exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_times') IS NOT NULL
+	DROP TABLE #temp_play_times
+
+	SELECT PlayerID AS nfl_player_id
+		,pt.ClubID AS nfl_club_id
+		,pg.season
+		,UPPER(pg.season_type) AS season_type
+		,SUM(OffensivePlays) AS play_count_offense
+		,SUM(DefensivePlays) AS play_count_defense
+		,SUM(SpecialTeamPlays) AS play_count_st
+	INTO #temp_play_times
+	FROM ClubDB.dbo.PlayTime pt
+	INNER JOIN [BaneProductionAnalytics].dbo.pro_games pg
+		ON pt.GameKey = pg.nfl_game_key
+	WHERE pt.season >= 2012
+	GROUP BY PlayerID
+		,pt.ClubID
+		,pg.season
+		,UPPER(pg.season_type)
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with all the players on IR at the end of the season.  This helps make sure a player
+spent the whole year on IR, and wasn't IR to return (not a stash) and wasn't waive injured (not a stash).
+
+OUTPUT TABLES:
+#temp_ir_end_of_season
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_ir_end_of_season exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_ir_end_of_season') IS NOT NULL
+	DROP TABLE #temp_ir_end_of_season
+
+	SELECT nfl_player_id
+		,season
+		,club_id AS nfl_club_id
+	INTO #temp_ir_end_of_season
+	FROM Analytics.dbo.analysis_players_gameweek_status
+	WHERE season_type = 'REG'
+		AND season >= 2011
+		AND [week] = 17
+		AND status_roster_simple = 'INJURED'
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with all the players on IR by season, with a row for the first week they are on IR.
+
+OUTPUT TABLES:
+#temp_ir_list
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_ir_list exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_ir_list') IS NOT NULL
+	DROP TABLE #temp_ir_list
+
+	SELECT gw.nfl_player_id
+		,gw.season
+		,gw.club_id AS nfl_club_id
+		,MIN([week]) AS first_week_on_ir
+	INTO #temp_ir_list
+	FROM Analytics.dbo.analysis_players_gameweek_status gw
+	WHERE season_type = 'REG'
+		AND gw.season >= 2012
+		AND status_roster_simple = 'INJURED'
+	GROUP BY gw.nfl_player_id
+		,gw.season
+		,gw.club_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table that notes if a player started the season on PUP.
+
+OUTPUT TABLES:
+#temp_pup_list
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_pup_list exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pup_list') IS NOT NULL
+	DROP TABLE #temp_pup_list
+
+	SELECT gw.nfl_player_id
+		,gw.season
+		,gw.club_id AS nfl_club_id
+	INTO #temp_pup_list
+	FROM Analytics.dbo.analysis_players_gameweek_status gw
+	WHERE season_type = 'REG'
+		AND gw.season >= 2012
+		AND [week] = 1
+		AND status_roster_simple = 'PUP'
+
+		
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join all the tables together to create the ir stash list.
+
+OUTPUT TABLES:
+#temp_ir_stashes
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_ir_stashes exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_ir_stashes') IS NOT NULL
+	DROP TABLE #temp_ir_stashes
+
+	SELECT ir.nfl_player_id
+		,ir.season
+		,ir.nfl_club_id
+		,first_week_on_ir
+		,CASE WHEN COALESCE((ptp.play_count_offense + ptp.play_count_defense + ptp.play_count_st),0) > 0 THEN 1 ELSE 0 END AS current_preseason_playtime
+		,CASE WHEN COALESCE((ptr.play_count_offense + ptr.play_count_defense + ptr.play_count_st),0) <= 100 --didn't play significant time the year before
+			AND COALESCE((ptc.play_count_offense + ptc.play_count_defense + ptc.play_count_st),0) <= 10  --didn't play the current year
+			AND COALESCE((ptp.play_count_offense + ptp.play_count_defense),0) > 0 --played in the preseason
+			AND rp.nfl_player_id IS NOT NULL --is on the team the next year
+			AND es.nfl_player_id IS NOT NULL --was on IR at the end of the season
+			AND COALESCE(draft_round,8) >= 3 --is a third round pick or higher or undrafted
+			AND (ir.season - draft_year + 1) <= 2 --is in his first or second season
+			AND first_week_on_ir <= 12--wasn't a late season ir add
+		THEN 1 ELSE 0 END AS likely_stash
+	INTO #temp_ir_stashes
+	FROM #temp_ir_list ir
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON ir.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	LEFT JOIN #temp_roster_players rp
+		ON ir.nfl_player_id = rp.nfl_player_id
+		AND ir.nfl_club_id = rp.nfl_club_id
+		AND ir.season = rp.season - 1 
+	LEFT JOIN #temp_play_times ptr --play time the previous season
+		ON ir.nfl_player_id = ptr.nfl_player_id
+		AND ir.nfl_club_id = ptr.nfl_club_id
+		AND ir.season = ptr.season + 1
+		AND UPPER(ptr.season_type) = 'REG'
+	LEFT JOIN #temp_play_times ptc --play time the current season
+		ON ir.nfl_player_id = ptc.nfl_player_id
+		AND ir.nfl_club_id = ptc.nfl_club_id
+		AND ir.season = ptc.season
+		AND UPPER(ptc.season_type) = 'REG'
+	LEFT JOIN #temp_play_times ptp --play time the current preseason
+		ON ir.nfl_player_id = ptp.nfl_player_id
+		AND ir.nfl_club_id = ptp.nfl_club_id
+		AND ir.season = ptp.season
+		AND UPPER(ptp.season_type) = 'PRE'
+	LEFT JOIN #temp_ir_end_of_season es
+		ON ir.nfl_player_id = es.nfl_player_id
+		AND ir.nfl_club_id = es.nfl_club_id
+		AND ir.season = es.season
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with all the weeks missed due to injury. Each week on IR or inactive injured is its own row.
+
+Maybe try to account for "camp bodies" injured by seeing if the player had any playtime the next season
+for the same or different teams?
+
+OUTPUT TABLES:
+#temp_weeks_missed
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_weeks_missed exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_weeks_missed') IS NOT NULL
+	DROP TABLE #temp_weeks_missed
+
+	SELECT gw.nfl_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,DATEDIFF(DD,(birth_date), regular_season_start) / 365.2425 AS age_at_season_start
+		,gw.season
+		,[week]
+		,cl.nfl_club_id
+		,cl.code AS club_code
+		,status_roster_simple
+		,injury_status_week
+		,injury_text_week
+		,practices_missed
+		,status_start_date
+		,status_end_date
+		,nfl_game_week_begin
+		,nfl_game_week_end
+		,game_datetime
+		,COALESCE(likely_stash,0) AS likely_stash
+		,CASE WHEN es.nfl_player_id IS NOT NULL AND (status_roster_simple = 'PUP' OR (status_roster_simple IN ('INJURED','INACTIVE') AND (active_game_count = 0 OR active_game_count IS NULL) AND pup.nfl_player_id IS NOT NULL)) THEN 1 ELSE 0 END AS likely_carryover_injury
+		,CASE WHEN es.nfl_player_id IS NULL AND status_roster_simple = 'PUP' THEN 1 ELSE 0 END AS likely_precamp_injury
+		,CASE WHEN es.nfl_player_id IS NULL AND current_preseason_playtime = 0 THEN 1 ELSE 0 END AS likely_camp_injury --this only works for week 1, it gets wonky later in season
+	INTO #temp_weeks_missed
+	FROM Analytics.dbo.analysis_players_gameweek_status gw
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON gw.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON gw.club_id = cl.nfl_club_id
+		AND cl.is_disabled = 0
+	INNER JOIN [Analytics].[dbo].[map_nfl_league_year_dates] ld
+		ON gw.season = ld.season
+	LEFT JOIN #temp_ir_stashes st
+		ON gw.nfl_player_id = st.nfl_player_id
+		AND gw.season = st.season
+		AND gw.club_id = st.nfl_club_id
+	LEFT JOIN #temp_ir_end_of_season es
+		ON gw.nfl_player_id = es.nfl_player_id
+		AND gw.club_id = es.nfl_club_id
+		AND gw.season = es.season + 1
+	LEFT JOIN #temp_pup_list pup
+		ON gw.nfl_player_id = pup.nfl_player_id
+		AND gw.club_id = pup.nfl_club_id
+		AND gw.season = pup.season
+	WHERE season_type = 'REG'
+		AND gw.season >= 2012
+		--AND [week] = 1
+		AND ((status_roster_simple IN ('INJURED','PUP') AND nfl_game_key IS NOT NULL) OR (status_roster_simple IN ('INACTIVE') AND injury_status_week IS NOT NULL))
+		AND COALESCE(UPPER(injury_text_week),'XXX') NOT LIKE '%ILLN%'
+		AND COALESCE(UPPER(injury_text_week),'XXX') NOT LIKE '%NOT%'
+		AND COALESCE(UPPER(injury_text_week),'XXX') NOT LIKE '%NON%'
+
+/*
+SELECT *
+FROM #temp_weeks_missed
+
+SELECT *
+FROM #temp_ir_stashes
+WHERE nfl_player_id = 35541
+AND season = 2014
+AND season_type = 'Reg'
+ORDER BY week
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a team, season, next season injury totals to see if there is any year to year correlation.
+
+OUTPUT TABLES:
+#temp_weeks_missed_sum
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_offseason_injuries_sum exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_offseason_injuries_sum') IS NOT NULL
+	DROP TABLE #temp_offseason_injuries_sum
+
+	SELECT nfl_club_id
+		,club_code
+		,season
+		,COUNT(nfl_player_id) AS injury_count
+	INTO #temp_offseason_injuries_sum
+	FROM #temp_weeks_missed
+	WHERE likely_stash = 0
+		AND likely_carryover_injury = 0
+		AND [week] = 1
+	GROUP BY nfl_club_id
+		,club_code
+		,season
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Self join the injury sum table so you have this and next year injuries in the same row.
+
+OUTPUT TABLES:
+#temp_offseason_injuries_next
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_offseason_injuries_next exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_offseason_injuries_next') IS NOT NULL
+	DROP TABLE #temp_offseason_injuries_next
+
+	SELECT i1.nfl_club_id
+		,i1.club_code
+		,i1.season
+		,i1.injury_count
+		,i2.injury_count AS injury_count_next
+		,i3.injury_count AS injury_count_next2
+	INTO #temp_offseason_injuries_next
+	FROM #temp_offseason_injuries_sum i1
+	LEFT JOIN #temp_offseason_injuries_sum i2
+		ON i1.nfl_club_id = i2.nfl_club_id
+		AND i1.season = i2.season - 1
+	LEFT JOIN #temp_offseason_injuries_sum i3
+		ON i1.nfl_club_id = i3.nfl_club_id
+		AND i1.season = i3.season - 2
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up the paid injury grievances by team and season.
+
+OUTPUT TABLES:
+#temp_injury_settlements
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_injury_settlements exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_injury_settlements') IS NOT NULL
+	DROP TABLE #temp_injury_settlements
+
+	SELECT ClubID AS nfl_club_id
+		,Season AS season
+		,SUM(CapAmount) AS injury_settlements_amount
+	INTO #temp_injury_settlements
+	FROM ClubDB.dbo.CapDetails
+	WHERE ToDate IS NULL
+		AND Season >= 2012
+		AND SectionTitle in ('Injury Settlement','Injury Grievance')
+	GROUP BY ClubID
+		,Season
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join in the cap dollars paid during injury weeks.
+
+OUTPUT TABLES:
+#temp_injuries_cap
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_injuries_cap exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_injuries_cap') IS NOT NULL
+	DROP TABLE #temp_injuries_cap
+
+	SELECT wm.*
+		,cr.CapAmt / 17 AS cap_amount
+	INTO #temp_injuries_cap
+	FROM #temp_weeks_missed wm
+	LEFT JOIN ClubDB.dbo.CapRollup cr
+		ON wm.nfl_player_id = cr.PlayerID
+		AND wm.nfl_club_id = cr.ClubID
+		AND wm.season = cr.season
+		AND wm.game_datetime >= cr.FromDate
+		AND wm.game_datetime <= COALESCE(cr.ToDate,'12/31/2999')
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up the cap dollars lost to injury
+
+OUTPUT TABLES:
+#temp_cap_lost_to_injury
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_cap_lost_to_injury exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cap_lost_to_injury') IS NOT NULL
+	DROP TABLE #temp_cap_lost_to_injury
+
+	SELECT ca.nfl_club_id
+		,club_code
+		,ca.season
+		,injury_settlements_amount
+		,SUM(cap_amount) AS cap_lost_to_injury
+	--INTO #temp_cap_lost_to_injury
+	FROM #temp_injuries_cap ca
+	LEFT JOIN #temp_injury_settlements se
+		ON ca.nfl_club_id = se.nfl_club_id
+		AND ca.season = se.season
+	WHERE likely_stash = 0
+		AND likely_carryover_injury = 0
+		--AND (ca.season < 2017 OR (ca.season = 2017 AND [week] <= 4))
+	GROUP BY ca.nfl_club_id
+		,ca.club_code
+		,ca.season
+		,injury_settlements_amount
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Self join the injury sum table so you have this and next year cap in the same row.
+
+OUTPUT TABLES:
+#temp_cap_lost_to_injury_next
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_cap_lost_to_injury_next exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cap_lost_to_injury_next') IS NOT NULL
+	DROP TABLE #temp_cap_lost_to_injury_next
+
+	SELECT i1.nfl_club_id
+		,i1.club_code
+		,i1.season
+		,i1.injury_settlements_amount + i1.cap_lost_to_injury AS cap_lost_to_injury
+		,i2.injury_settlements_amount + i2.cap_lost_to_injury AS cap_lost_to_injury_next
+		,i3.injury_settlements_amount + i3.cap_lost_to_injury AS cap_lost_to_injury_next2
+	INTO Analytics.dbo.work_r_input_injuries_cap_dollars
+	FROM #temp_cap_lost_to_injury i1
+	LEFT JOIN #temp_cap_lost_to_injury i2
+		ON i1.nfl_club_id = i2.nfl_club_id
+		AND i1.season = i2.season - 1
+	LEFT JOIN #temp_cap_lost_to_injury i3
+		ON i1.nfl_club_id = i3.nfl_club_id
+		AND i1.season = i3.season - 2
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join in the pro grades
+
+OUTPUT TABLES:
+#temp_injury_with_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_injury_with_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_injury_with_grades') IS NOT NULL
+	DROP TABLE #temp_injury_with_grades
+
+	SELECT wm.*
+		,grade_bucket
+		,case when grade_bucket >= 6 THEN 1 ELSE 0 END AS over60
+		,case when grade_bucket >= 6.3 THEN 1 ELSE 0 END AS over63
+		,case when grade_bucket >= 6.7 THEN 1 ELSE 0 END AS over67
+	--INTO #temp_injury_with_grades
+	FROM #temp_weeks_missed wm
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades gr
+		ON wm.nfl_player_id = gr.nfl_player_id
+		AND wm.season = gr.report_season
+
