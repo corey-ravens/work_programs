@@ -1,54 +1,48 @@
 
 
 
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+There are multiple levels to compare players at. From most granular to least:
+	-On field vs off field for a given play
+	-Active or healthy scratch
+	-On a roster vs on the street
+
+This step is to get all the player game weeks ready.
+
+Next is to join at the player play level.  Then do a massiv join for evey player to player matchup.
+There are going to be some big tables - maybe to them by week or season?
+
+Ignore injured and suspended players - dont count those as "losses" because there isn't an active choice to not play them being made.
+
+OUTPUT TABLES:
+#temp_players_gameweek_statuses
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_players_gameweek_statuses exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_players_gameweek_statuses') IS NOT NULL
+	DROP TABLE #temp_players_gameweek_statuses
 
 	SELECT nfl_player_id
 		,gs.season
 		,season_type
 		,[week]
 		,CASE WHEN nfl_game_key IS NULL THEN 999999 ELSE nfl_game_key END AS nfl_game_key
-		,CASE WHEN status_roster_simple = 'ACTIVEEXEMPT' THEN 'SUSPENDED'
-			WHEN status_roster_simple = 'WAIVEINJ' THEN 'WAIVERS'
-			ELSE status_roster_simple END AS status_roster_simple
-		,CASE WHEN status_roster_simple	IN ('FREEAGENT','PRACTICESQUAD','WAIVERS','WAIVEINJ') THEN 'STREET'
-			WHEN status_roster_simple IN ('EXEMPT','RESERVE','INJURED','PUP','SUSPENDED','ACTIVEEXEMPT') THEN 'INJSUSP'
-			WHEN status_roster_simple IN ('RETIRED') THEN 'RETIRED'
-			WHEN status_roster_simple IN ('ACTIVE','INACTIVE') THEN 'ON53'
-			ELSE NULL
-		END AS status_group
-		,CASE WHEN status_roster_simple	IN ('FREEAGENT') THEN 'FA'
-			WHEN status_roster_simple IN ('PRACTICESQUAD') THEN 'PS'
-			WHEN status_roster_simple IN ('WAIVERS','WAIVEINJ') THEN 'WV'
-			WHEN status_roster_simple IN ('EXEMPT') THEN 'EXE'
-			WHEN status_roster_simple IN ('RESERVE') THEN 'RES'
-			WHEN status_roster_simple IN ('INJURED') THEN 'INJ'
-			WHEN status_roster_simple IN ('PUP') THEN 'PUP'
-			WHEN status_roster_simple IN ('SUSPENDED','ACTIVEEXEMPT') THEN 'SUS'
-			WHEN status_roster_simple IN ('RETIRED') THEN 'RET'
-			WHEN status_roster_simple IN ('ACTIVE') THEN 'ACT'
-			WHEN status_roster_simple IN ('INACTIVE') THEN 'INA'
-		ELSE NULL
-		END AS status_code
-		,CASE WHEN club_id IS NULL THEN 'FA'
-			ELSE cl.code 
-		END AS club_code
-		,CASE WHEN status_roster_simple	IN ('FREEAGENT') THEN 'FA'
-			WHEN status_roster_simple IN ('PRACTICESQUAD') THEN CONCAT(cl.code,' - ','PS')
-			WHEN status_roster_simple IN ('WAIVERS','WAIVEINJ') THEN CONCAT(cl.code,' - ','WV')
-			WHEN status_roster_simple IN ('EXEMPT') THEN CONCAT(cl.code,' - ','EXE')
-			WHEN status_roster_simple IN ('RESERVE') THEN CONCAT(cl.code,' - ','RES')
-			WHEN status_roster_simple IN ('INJURED') THEN CONCAT(cl.code,' - ','INJ')
-			WHEN status_roster_simple IN ('PUP') THEN CONCAT(cl.code,' - ','PUP')
-			WHEN status_roster_simple IN ('SUSPENDED','ACTIVEEXEMPT') THEN CONCAT(cl.code,' - ','SUS')
-			WHEN status_roster_simple IN ('RETIRED') THEN CONCAT(cl.code,' - ','RET')
-			WHEN status_roster_simple IN ('ACTIVE') THEN CONCAT(cl.code,' - ','ACT')
-			WHEN status_roster_simple IN ('INACTIVE') THEN CONCAT(cl.code,' - ','INA')
-		ELSE NULL
-		END AS status_code_with_club
+		,gs.status_roster_simple
+		,gs.club_id AS nfl_club_id
 		,CASE WHEN status_roster_simple	IN ('FREEAGENT','PRACTICESQUAD','WAIVERS','WAIVEINJ') THEN 1 ELSE 0 END AS is_street
-		,CASE WHEN status_roster_simple	IN ('ACTIVE','INACTIVE') THEN 1 ELSE 0 END AS is_53
+		,CASE WHEN status_roster_simple IN ('ACTIVE','INACTIVE') THEN 1 ELSE 0 END AS is_on_53
+		,CASE WHEN status_roster_simple	IN ('INACTIVE') AND injury_status_week IS NULL THEN 1 ELSE 0 END AS is_healthy_scratch
+		,CASE WHEN status_roster_simple IN ('ACTIVE') THEN 1 ELSE 0 END AS is_active
 		,COALESCE(mp.position_abbreviation,po.translation) AS position
 		,CASE WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('QB') THEN 'QB'
 			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('RB','WR','TE','FB','KR','PR') THEN 'ELIGIBLE'
@@ -64,6 +58,7 @@
 			WHEN COALESCE(mp.position_abbreviation,po.translation) IN ('DE','DT','NT','DL','OB','IB','RUSH','SAM','DC','NB','CB','DS','SS','FS') THEN 'DEF'
 			ELSE 'ST'
 		END AS position_unit
+	INTO #temp_players_gameweek_statuses
 	FROM Analytics.dbo.analysis_players_gameweek_status gs
 	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
 		ON gs.club_id = cl.nfl_club_id
@@ -78,27 +73,199 @@
 		AND pl.is_deleted = 0
 	LEFT JOIN BaneProductionAnalytics.dbo.positions po
 		ON pl.position_id = po.id
-	WHERE gs.season = 2019
+	WHERE gs.season_type = 'REG'
+		AND gs.season = 2019
 		AND gs.[week] = 1
-		AND season_type = 'REG'
-	ORDER BY gs.season
-		,gs.season_type DESC --so reg before post
-		,gs.[week]
-		,gs.nfl_player_id
+		--AND cl.code = 'BLT'
 		
 
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the roster status data to the play level participation data.
+
+OUTPUT TABLES:
+#temp_statuses_with_plays
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_statuses_with_plays exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_statuses_with_plays') IS NOT NULL
+	DROP TABLE #temp_statuses_with_plays
+
+	SELECT gs.nfl_game_key
+		,gs.nfl_club_id
+		,gs.nfl_player_id
+		,pff_pp_id
+		,an.pff_play_id
+		,'DEF' AS play_type
+		,cl.code AS team
+		,cl.nfl_club_id AS nfl_club_id_play
+		,1 AS on_field
+	INTO #temp_statuses_with_plays
+	FROM #temp_players_gameweek_statuses gs
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON gs.nfl_game_key = an.gsis_game_key
+	INNER JOIN Analytics.dbo.stage_plays_player_defensive_alignment da
+		ON an.pff_play_id = da.pff_play_id
+		AND gs.nfl_player_id = da.nfl_player_id
+	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
+		ON da.team = co.pff_TEAM
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
+		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.team END = cl.code
+		AND cl.is_disabled = 0
+	INNER JOIN Analytics.dbo.stage_plays_play_type ty
+		ON an.pff_play_id = ty.pff_play_id
+	WHERE ty.is_qb_kneel = 0
+
+
+	INSERT INTO #temp_statuses_with_plays
+	SELECT gs.nfl_game_key
+		,gs.nfl_club_id
+		,gs.nfl_player_id
+		,pff_pp_id
+		,an.pff_play_id
+		,'OFF' AS play_type
+		,cl.code AS team
+		,cl.nfl_club_id AS nfl_club_id_play
+		,1 AS on_field
+	FROM #temp_players_gameweek_statuses gs
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON gs.nfl_game_key = an.gsis_game_key
+	INNER JOIN Analytics.dbo.stage_plays_player_offensive_alignment da
+		ON an.pff_play_id = da.pff_play_id
+	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
+		ON da.team = co.pff_TEAM
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
+		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.team END = cl.code
+		AND cl.is_disabled = 0
+		AND gs.nfl_player_id = da.nfl_player_id
+	INNER JOIN Analytics.dbo.stage_plays_play_type ty
+		ON an.pff_play_id = ty.pff_play_id
+	WHERE ty.is_qb_kneel = 0
+
+
+	INSERT INTO #temp_statuses_with_plays
+	SELECT gs.nfl_game_key
+		,gs.nfl_club_id
+		,gs.nfl_player_id
+		,pff_PPID AS pff_pp_id
+		,pff_PLAYID AS pff_play_id
+		,'ST' AS play_type
+		,cl.code AS team
+		,cl.nfl_club_id AS nfl_club_id_play
+		,1 AS on_field
+	FROM #temp_players_gameweek_statuses gs
+	INNER JOIN PFF.dbo.PFFSpecial da
+		ON gs.nfl_game_key = da.pff_GSISGAMEKEY
+		AND gs.nfl_player_id = da.pff_GSISPLAYERID
+	LEFT JOIN Analytics.dbo.map_pff_team_code_changes co
+		ON da.pff_TEAM = co.pff_TEAM
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
+		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.pff_TEAM END = cl.code
+		AND cl.is_disabled = 0
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Give players who are on a roster a win over players on the street.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_roster_vs_street exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_roster_vs_street') IS NOT NULL
+	DROP TABLE #temp_roster_vs_street
+
+	SELECT ro.nfl_game_key
+		,ro.nfl_player_id AS target_player_id
+		,ro.status_roster_simple AS target_status
+		,st.nfl_player_id AS matchup_player_id
+		,st.status_roster_simple AS matchup_status
+		,1 AS matchup_weight
+	INTO #temp_roster_vs_street
+	FROM #temp_players_gameweek_statuses ro
+	INNER JOIN #temp_players_gameweek_statuses st
+		ON ro.season = st.season
+		AND ro.season_type = st.season_type
+		AND ro.[week] = st.[week]
+		AND ro.nfl_player_id <> st.nfl_player_id
+		AND st.is_street = 1
+	WHERE ro.is_on_53 = 1
 
 
 
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-select min(season)
-from [AnalyticsWork].[dbo].[analysis_players_elo_ratings_regular_new]
+Give players who are active a "win" over players who are healthy scratches.
 
-select pff_gameseason
-,count(*)
-from pff.dbo.pffplays p
-inner join pff.dbo.PFFOffense o
-on p.pff_playid = o.pff_playid
-where pff_week not like 'P%'
-group by  pff_gameseason
-order by  pff_gameseason
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_active_vs_healthy_scratch exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_active_vs_healthy_scratch') IS NOT NULL
+	DROP TABLE #temp_active_vs_healthy_scratch
+
+	SELECT ac.nfl_game_key
+		,ac.nfl_player_id AS target_player_id
+		,ac.status_roster_simple AS target_status
+		,hs.nfl_player_id AS matchup_player_id
+		,hs.status_roster_simple AS matchup_status
+		,1 AS matchup_weight
+	INTO #temp_active_vs_healthy_scratch
+	FROM #temp_players_gameweek_statuses ac
+	INNER JOIN #temp_players_gameweek_statuses hs
+		ON ac.nfl_game_key = hs.nfl_game_key
+		AND ac.nfl_club_id = hs.nfl_club_id
+		AND ac.nfl_player_id <> hs.nfl_player_id
+		AND hs.is_healthy_scratch = 1
+	WHERE ac.is_active = 1
+		
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Give players who are in on a play a win over the players who are not in on a play.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_play_counts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_counts') IS NOT NULL
+	DROP TABLE #temp_play_counts
+
+	SELECT nfl_game_key
+		,nfl_club_id_play
+		,play_type
+		,COUNT(DISTINCT pff_play_id) AS play_count
+	INTO #temp_play_counts
+	FROM #temp_statuses_with_plays ta
+	GROUP BY nfl_game_key
+		,nfl_club_id_play
+		,play_type
+
+
+-- Check if #temp_on_vs_off_field exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_on_vs_off_field') IS NOT NULL
+	DROP TABLE #temp_on_vs_off_field
+
+	SELECT ta.nfl_game_key
+		,ta.nfl_player_id AS target_player_id
+		,ta.pff_play_id
+		,ta.pff_pp_id
+		,ta.on_field
+		,mu.nfl_player_id AS matchup_player_id
+		,mu.status_roster_simple
+		,CAST(1 AS FLOAT)/ISNULL(pc.play_count,0) AS matchup_weight
+		,pc.play_count
+	INTO #temp_on_vs_off_field
+	FROM #temp_statuses_with_plays ta
+	INNER JOIN #temp_players_gameweek_statuses mu
+		ON ta.nfl_game_key = mu.nfl_game_key
+		AND ta.nfl_club_id_play = mu.nfl_club_id
+		AND ta.nfl_player_id <> mu.nfl_player_id
+		AND ta.play_type = mu.position_unit
+		AND mu.nfl_player_id NOT IN (SELECT DISTINCT nfl_player_id FROM #temp_statuses_with_plays ta2 WHERE ta.pff_play_id = ta2.pff_play_id)
+		AND mu.is_active = 1
+	INNER JOIN #temp_play_counts pc
+		ON ta.nfl_game_key = pc.nfl_game_key
+		AND ta.nfl_club_id_play = pc.nfl_club_id_play
+		AND ta.play_type = pc.play_type
+
+
+
