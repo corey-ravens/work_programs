@@ -204,10 +204,10 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 
 
 	INSERT INTO #temp_player_plays
-	SELECT pff_GSISGAMEKEY AS nfl_game_key
-		,pff_PPID AS pff_pp_id
-		,pff_PLAYID AS pff_play_id
-		,pff_GSISPLAYERID AS nfl_player_id
+	SELECT da.pff_GSISGAMEKEY AS nfl_game_key
+		,da.pff_PPID AS pff_pp_id
+		,da.pff_PLAYID AS pff_play_id
+		,da.pff_GSISPLAYERID AS nfl_player_id
 		,'st' AS play_type
 		,cl.code AS team
 		,cl.nfl_club_id AS nfl_club_id_play
@@ -217,11 +217,11 @@ IF OBJECT_ID('tempdb..#temp_player_plays') IS NOT NULL
 	INNER JOIN BaneProductionAnalytics.dbo.clubs cl	
 		ON CASE WHEN co.pff_TEAM IS NOT NULL THEN co.club_code_new ELSE da.pff_TEAM END = cl.code
 		AND cl.is_disabled = 0
-	INNER JOIN AnalyticsWork.dbo.rd_playfact aw
-		ON da.pff_GSISGAMEKEY = aw.GameKey
-		AND da.pff_GSISPLAYID = aw.PlayID
-	WHERE pff_GSISGAMEKEY IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
-		AND WPstart BETWEEN 0.1 AND 0.99
+	--AnalyticsWork.dbo.rd_playfact doesn't have WPStart for kickoffs, so we removed it for how (05/24/2020)
+	INNER JOIN PFF.dbo.PffPlays pl
+		ON da.pff_PLAYID = pl.pff_PLAYID
+	WHERE da.pff_GSISGAMEKEY IN (SELECT DISTINCT nfl_game_key FROM #temp_players_gameweek_statuses)
+		AND pl.pff_SPECIALTEAMSTYPE IN ('KICKOFF','PUNT')
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -363,25 +363,15 @@ IF OBJECT_ID('tempdb..#temp_most_recent_ratings') IS NOT NULL
 	DROP TABLE #temp_most_recent_ratings
 
 	SELECT nfl_player_id
-		,'special_teams' AS rating_type
-		,MAX(elo_rating) AS rating_previous
+		,rating_type
+		,MAX(rating) AS rating_previous
 	INTO #temp_most_recent_ratings
-	FROM Analytics.dbo.analysis_players_elo_ratings_special_teams_COREY ee
-	WHERE ee.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_special_teams_COREY ee1 WHERE ee.nfl_player_id = ee1.nfl_player_id)
-		AND ee.[week] = (SELECT MAX([week]) FROM Analytics.dbo.analysis_players_elo_ratings_special_teams_COREY ee2 WHERE ee.nfl_player_id = ee2.nfl_player_id 
-							AND ee2.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_special_teams_COREY ee3 WHERE ee2.nfl_player_id = ee3.nfl_player_id))
+	FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee
+	WHERE ee.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee1 WHERE ee.nfl_player_id = ee1.nfl_player_id AND ee.rating_type = ee1.rating_type)
+		AND ee.[week] = (SELECT MAX([week]) FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee2 WHERE ee.nfl_player_id = ee2.nfl_player_id  AND ee.rating_type = ee2.rating_type
+							AND ee2.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_COREY ee3 WHERE ee2.nfl_player_id = ee3.nfl_player_id AND ee2.rating_type = ee3.rating_type))
 	GROUP BY nfl_player_id
-
-		
-	INSERT INTO #temp_most_recent_ratings		
-	SELECT nfl_player_id
-		,'regular' AS rating_type
-		,MAX(elo_rating) AS rating_previous
-	FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee
-	WHERE ee.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee1 WHERE ee.nfl_player_id = ee1.nfl_player_id)
-		AND ee.[week] = (SELECT MAX([week]) FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee2 WHERE ee.nfl_player_id = ee2.nfl_player_id 
-							AND ee2.season = (SELECT MAX(season) FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY ee3 WHERE ee2.nfl_player_id = ee3.nfl_player_id))
-	GROUP BY nfl_player_id
+		,rating_type
 
 /*
 This is in case you want to switch from subqueries to ranking...whichever is quicker.
@@ -391,9 +381,9 @@ IF OBJECT_ID('tempdb..#temp_most_recent_ratings') IS NOT NULL
 	DROP TABLE #temp_most_recent_ratings
 		
 	SELECT nfl_player_id
-		,rating_group_key
+		,rating_type
 		,rating AS previous_rating
-		,RANK() OVER (PARTITION BY nfl_player_id ORDER BY season DESC, [week] DESC, rating DESC) AS rating_order
+		,RANK() OVER (PARTITION BY nfl_player_id, rating_type ORDER BY season DESC, [week] DESC, rating DESC) AS rating_order
 	INTO #temp_most_recent_ratings
 	FROM Analytics.dbo.analysis_players_elo_ratings_regular_COREY
 */
@@ -438,9 +428,10 @@ IF OBJECT_ID('tempdb..#temp_elo_matchups_with_ratings_st') IS NOT NULL
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-Sum up the player elo ratings.  Because they are still in one row per matchups, append the wins and the losses, then take the sum of both.
+Sum up the player elo ratings.  Because they are still in one row per matchup, append the losses to the wins, then take the sum of both.
+Add regular and special_teams all together into one table with a type variable to sum them up separately.
 
-You keep them together up until this point because they depend on each other to calculate "expected scores" in each matchup.
+You keep them together up until this point because the players depend on each other to calculate the "expected scores" in each matchup.
 
 OUTPUT TABLES:
 #temp_elo_scores
@@ -450,17 +441,34 @@ OUTPUT TABLES:
 -- Check if #temp_elo_wins_and_losses exists, if it does drop it
 IF OBJECT_ID('tempdb..#temp_elo_wins_and_losses') IS NOT NULL
 	DROP TABLE #temp_elo_wins_and_losses
-		
+	
 	SELECT winner_nfl_player_id AS nfl_player_id
+		,'special_teams' AS elo_type
 		,SUM((1 - winner_expected_score) * matchup_weight * matchup_elo_k_value) AS elo_score
 	INTO #temp_elo_wins_and_losses
-	FROM #temp_elo_matchups_with_ratings
+	FROM #temp_elo_matchups_with_ratings_st
 	GROUP BY winner_nfl_player_id
 
 
 	INSERT INTO #temp_elo_wins_and_losses
 	SELECT loser_nfl_player_id AS nfl_player_id
-		,SUM((0 - winner_expected_score) * matchup_weight * matchup_elo_k_value) AS elo_score
+		,'special_teams' AS elo_type
+		,SUM((0 - loser_expected_score) * matchup_weight * matchup_elo_k_value) AS elo_score
+	FROM #temp_elo_matchups_with_ratings_st
+	GROUP BY loser_nfl_player_id	
+	
+
+	INSERT INTO #temp_elo_wins_and_losses
+	SELECT winner_nfl_player_id AS nfl_player_id
+		,'regular' AS elo_type
+		,SUM((1 - winner_expected_score) * matchup_weight * matchup_elo_k_value) AS elo_score
+	FROM #temp_elo_matchups_with_ratings
+	GROUP BY winner_nfl_player_id
+
+	INSERT INTO #temp_elo_wins_and_losses
+	SELECT loser_nfl_player_id AS nfl_player_id
+		,'regular' AS elo_type
+		,SUM((0 - loser_expected_score) * matchup_weight * matchup_elo_k_value) AS elo_score
 	FROM #temp_elo_matchups_with_ratings
 	GROUP BY loser_nfl_player_id
 
@@ -470,9 +478,12 @@ IF OBJECT_ID('tempdb..#temp_elo_scores') IS NOT NULL
 	DROP TABLE #temp_elo_scores
 
 	SELECT nfl_player_id
+		,elo_type
 		,SUM(elo_score) AS elo_score
+	INTO #temp_elo_scores
 	FROM #temp_elo_wins_and_losses
 	GROUP BY nfl_player_id
+		,elo_type
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -480,23 +491,22 @@ IF OBJECT_ID('tempdb..#temp_elo_scores') IS NOT NULL
 Update the player elo ratings table.
 
 OUTPUT TABLES:
-Analytics.dbo.analysis_players_elo_ratings_regular_COREY
-Analytics.dbo.analysis_players_elo_ratings_special_teams_COREY
+Analytics.dbo.analysis_players_elo_ratings_COREY
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 DECLARE @aSeason INT = 2018
 DECLARE @aWeek INT = 17
 		
-	--INSERT INTO Analytics.dbo.analysis_players_elo_ratings_regular_COREY
+	--INSERT INTO Analytics.dbo.analysis_players_elo_ratings_COREY
 	SELECT wl.nfl_player_id
 		,@aSeason AS season
 		,@aWeek AS [week]
-		,rr.rating_previous + (elo_score) AS elo_rating
+		,rr.rating_type
+		,rr.rating_previous + wl.elo_score AS rating
 		,GETDATE() AS created_date
 	FROM #temp_most_recent_ratings rr
 	LEFT JOIN #temp_elo_wins_and_losses wl
-		ON wl.nfl_player_id = rr.nfl_player_id
-	WHERE rr.rating_type = 'regular'
-
+		ON rr.nfl_player_id = wl.nfl_player_id
+		AND rr.rating_type = wl.elo_type
 
