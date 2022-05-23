@@ -1,0 +1,504 @@
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get down to one row of draft board position. Take a players draft
+board position from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_board_positions_with_order
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_positions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions
+
+	SELECT player_id
+		,CASE WHEN position_translation IN ('RUSH','SAM') THEN 'OB'
+			WHEN position_translation IN ('FS','SS') THEN 'DS'
+			ELSE position_translation
+		END AS position
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-DEC' THEN 4
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DEC' THEN 5
+			ELSE NULL
+		END AS order_by
+	INTO #temp_draft_board_positions
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE position != '' AND position IS NOT NULL
+		AND player_id <> 64668
+
+
+-- Check if #temp_draft_board_positions_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_with_order
+
+	SELECT player_id
+		,position
+		,RANK() OVER (PARTITION BY player_id ORDER BY order_by) AS draft_board_position_order
+	INTO #temp_draft_board_positions_with_order
+	FROM #temp_draft_board_positions
+
+/*
+SELECT *
+FROM #temp_draft_board_positions_with_order
+*/
+
+-- Check if #temp_draft_board_positions_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_latest
+
+	SELECT *
+	INTO #temp_draft_board_positions_latest
+	FROM #temp_draft_board_positions_with_order
+	WHERE draft_board_position_order = 1
+
+/*
+SELECT DISTINCT position
+FROM #temp_draft_board_positions_latest
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get down to one row of draft board grade. Take a players draft
+board grade from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_board_grades_latest
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades
+
+	SELECT player_id AS bane_player_id
+		,legacy_grade
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-DEC' THEN 4
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DEC' THEN 5
+			ELSE NULL
+		END AS order_by
+	INTO #temp_draft_board_grades
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE legacy_grade != '' AND legacy_grade IS NOT NULL
+		AND player_id <> 64668
+
+
+-- Check if #temp_draft_board_grades_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_with_order
+
+	SELECT bane_player_id
+		,legacy_grade
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by) AS draft_board_grade_order
+	INTO #temp_draft_board_grades_with_order
+	FROM #temp_draft_board_grades
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_with_order
+*/
+
+-- Check if #temp_draft_board_grades_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_latest
+
+	SELECT *
+	INTO #temp_draft_board_grades_latest
+	FROM #temp_draft_board_grades_with_order
+	WHERE draft_board_grade_order = 1
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_latest
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create an equivalent games summary table
+
+OUTPUT TABLES:
+#temp_eqg_total
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DECLARE @current_draft INT
+SELECT @current_draft = (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start) + 1
+
+-- Check if #temp_eqg_total exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_eqg_total') IS NOT NULL
+	DROP TABLE #temp_eqg_total
+
+	SELECT pl.id AS bane_player_id
+		,SUM(equivalent_games) AS equivalent_games_total
+		,SUM(equivalent_games / IIF(@current_draft - draft_year > 4,4,@current_draft - draft_year)) AS equivalent_games_avg
+	INTO #temp_eqg_total
+	FROM Analytics.dbo.stage_players_season_playtime pt
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl
+		ON pt.nfl_player_id = pl.nfl_id
+	WHERE 1=1
+		AND season_type = 'REG'
+		AND season <= nfl_entry_year + 3
+	GROUP BY pl.id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the salary value for injured players
+
+OUTPUT TABLES:
+#temp_injured_salaries_one_row
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_injured_salaries exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_injured_salaries') IS NOT NULL
+	DROP TABLE #temp_injured_salaries
+
+	SELECT PlayerID AS nfl_player_id
+		,MAX([SalaryFit]) AS salaries
+	INTO #temp_injured_salaries
+	FROM [AnalyticsWork].[dbo].[rd1_players_defense_3] r1
+	WHERE report_week = 17
+		AND report_season = 2017
+		AND Season = (SELECT MAX(season) FROM [AnalyticsWork].[dbo].[rd1_players_defense_3] r2 WHERE r2.PlayerID = r1.PlayerID AND r2.report_week = 17 AND r2.report_season = 2017)
+	GROUP BY PlayerID
+
+
+	INSERT INTO #temp_injured_salaries
+	SELECT PlayerID AS nfl_player_id
+		,MAX([SalaryFit]) AS salaries
+	FROM [AnalyticsWork].[dbo].[rd1_players_offense_3] r1
+	WHERE report_week = 17
+		AND report_season = 2017
+		AND Season = (SELECT MAX(season) FROM [AnalyticsWork].[dbo].[rd1_players_offense_3] r2 WHERE r2.PlayerID = r1.PlayerID AND r2.report_week = 17 AND r2.report_season = 2017)
+	GROUP BY PlayerID
+
+
+-- Check if #temp_injured_salaries_one_row exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_injured_salaries_one_row') IS NOT NULL
+	DROP TABLE #temp_injured_salaries_one_row
+
+	SELECT nfl_player_id
+		,CASE WHEN MAX(salaries) < 0 THEN NULL ELSE MAX(salaries) END AS salaries
+	INTO #temp_injured_salaries_one_row
+	FROM #temp_injured_salaries
+	GROUP BY nfl_player_id
+
+	--SELECT * FROM #temp_injured_salaries_one_row
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a pct of cap summary table
+
+OUTPUT TABLES:
+#temp_pct_of_cap
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_pct_of_cap exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pct_of_cap') IS NOT NULL
+	DROP TABLE #temp_pct_of_cap
+
+	SELECT pl.nfl_id AS nfl_player_id
+		,MAX(sal.salaries) AS salaries
+	INTO #temp_pct_of_cap
+	FROM AnalyticsWork.dbo.salaries_for_modeling sal
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON sal.id = pl.id
+		AND pl.is_deleted = 0
+	WHERE sal.salaries NOT IN ('Injured','Pre-2011')
+	GROUP BY pl.nfl_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create an average/max pro grade table
+
+OUTPUT TABLES:
+#temp_pro_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_pro_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pro_grades') IS NOT NULL
+	DROP TABLE #temp_pro_grades
+
+	SELECT bane_player_id
+		,AVG(pg.grade_value) AS grade_avg
+		,MAX(pg.grade_value) AS grade_max
+	INTO #temp_pro_grades
+	FROM Analytics.dbo.analysis_players_pro_grades_first_4_seasons pg
+	WHERE pg.season_in_league IN (3,4)
+	GROUP BY bane_player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a min / max college grade table
+
+OUTPUT TABLES:
+#temp_college_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_college_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_college_grades') IS NOT NULL
+	DROP TABLE #temp_college_grades
+
+	SELECT player_id AS bane_player_id
+		,MAX(CAST(gr.[value] AS NUMERIC (3,1))) AS high_grade     
+		,MIN(CAST(gr.[value] AS NUMERIC (3,1))) AS low_grade     
+	INTO #temp_college_grades
+	FROM [BaneProductionAnalytics].[dbo].[reports] re
+	INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] t 
+		ON t.taggable_id = re.id 
+		AND UPPER(t.taggable_type) = 'REPORT'
+		AND t.tag_id = 11 --(it is a college report)
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+		ON re.grade_id = gr.id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[users] us
+		ON re.author_id = us.id               
+	WHERE 1=1
+		AND re.is_deleted = 0
+		AND UPPER(us.[type]) NOT LIKE '%COACH%'  
+		AND UPPER(re.[type]) <> 'SPECIAL TEAMS' 
+		AND gr.scale_id IN (4,6) --(it is an overall grade)
+		AND re.[type] IN ('fall','cross-check')
+	GROUP BY  player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a min / max allstar grade table
+
+OUTPUT TABLES:
+#temp_allstar_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_allstar_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_allstar_grades') IS NOT NULL
+	DROP TABLE #temp_allstar_grades
+
+	SELECT player_id AS bane_player_id
+		,MAX(CAST(gr.[value] AS NUMERIC (3,1))) AS high_grade
+		,MIN(CAST(gr.[value] AS NUMERIC (3,1))) AS low_grade
+	INTO #temp_allstar_grades
+	FROM [BaneProductionAnalytics].[dbo].[reports] re
+	INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] t 
+		ON t.taggable_id = re.id 
+		AND UPPER(t.taggable_type) = 'REPORT'
+		AND t.tag_id = 11 --(it is a college report)
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+		ON re.grade_id = gr.id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[users] us
+		ON re.author_id = us.id               
+	WHERE 1=1
+		AND re.is_deleted = 0
+		AND UPPER(us.[type]) NOT LIKE '%COACH%'  
+		AND UPPER(re.[type]) <> 'SPECIAL TEAMS' 
+		AND gr.scale_id IN (4,6) --(it is an overall grade)
+		AND re.[type] IN ('all star game')
+	GROUP BY  player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with player draft information and actual vs. expected play time, cap pct.
+
+OUTPUT TABLES:
+#temp_draft_info
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_info exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_info') IS NOT NULL
+	DROP TABLE #temp_draft_info
+
+	SELECT pl.id AS bane_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,CASE WHEN dp.position = 'WO' THEN 'WR'
+			WHEN dp.position = 'OH' THEN 'RB'
+			WHEN dp.position = 'DP' THEN 'OB'
+			WHEN dp.position = 'RUSH' THEN 'OB'
+			WHEN dp.position = 'SAM' THEN 'OB'
+			ELSE CASE WHEN pn.abbreviation = 'DE43' THEN 'OB' ELSE translation END
+		END AS position
+		,sc.code AS school
+		,CASE WHEN cl.code IN ('SL','LA') THEN 'LAR' 
+			WHEN cl.code = 'SD' THEN 'LAC'
+			ELSE cl.code
+		END AS entry_team
+		,draft_year
+		,draft_round
+		,pl.draft_number
+		,dg.legacy_grade AS board_grade
+		,cg.high_grade AS college_grade_max
+		,cg.low_grade AS college_grade_min
+		,asg.high_grade AS allstar_grade_max
+		,asg.low_grade AS allstar_grade_min
+		,mgr.[value] AS model_grade
+		,mg.model_without_board_score AS model_score
+		,seq.sequence_rank_final
+		,equivalent_games_avg
+		,equivalent_games_total
+		,CASE WHEN pl.draft_year > 2017 OR sal.salaries IN ('Pre-2011') OR (pl.draft_year <= 2007 AND sal.salaries IS NULL) THEN NULL 
+			ELSE CASE WHEN sal.salaries IN ('Injured') THEN sa.salaries
+					ELSE COALESCE(CAST(sal.salaries AS FLOAT),0) 
+				END 
+		END AS pct_of_cap
+		,CASE WHEN 
+			CASE WHEN pl.draft_year > 2017 OR sal.salaries IN ('Pre-2011') OR (pl.draft_year <= 2007 AND sal.salaries IS NULL) THEN NULL 
+				ELSE CASE WHEN sal.salaries IN ('Injured') THEN sa.salaries
+						ELSE COALESCE(CAST(sal.salaries AS FLOAT),0) 
+					END 
+			END >= (AveCapPct + FifthYearOptionFit) THEN 1
+		ELSE 0 END AS good_pick	
+		,grade_avg
+		,grade_max
+		,point_value_pat
+		,point_value_eugene
+		,point_value_stuart
+		,CASE WHEN dg.legacy_grade = 7.0 THEN 1
+			WHEN dg.legacy_grade = 6.9 THEN 2
+			WHEN dg.legacy_grade = 6.7 THEN 3
+			WHEN dg.legacy_grade = 6.5 THEN 4
+			WHEN dg.legacy_grade = 6.4 THEN 5
+			WHEN dg.legacy_grade = 6.3 THEN 6
+			WHEN dg.legacy_grade = 6.2 THEN 7
+			WHEN dg.legacy_grade = 6.1 THEN 8
+			WHEN dg.legacy_grade = 6.0 THEN 9
+			WHEN dg.legacy_grade = 5.9 THEN 10
+			WHEN dg.legacy_grade = 5.8 THEN 11
+			WHEN dg.legacy_grade = 5.7 THEN 12
+			WHEN dg.legacy_grade = 5.6 THEN 13
+			WHEN dg.legacy_grade = 5.5 THEN 14
+		END AS grade_order			
+	INTO #temp_draft_info
+	FROM BaneProductionAnalytics.dbo.players pl
+	LEFT JOIN BaneProductionAnalytics.dbo.positions pn
+		ON pl.position_id = pn.id  
+	LEFT JOIN #temp_draft_board_positions_latest dp
+		ON pl.id = dp.player_id
+	LEFT JOIN #temp_draft_board_grades_latest dg
+		ON pl.id = dg.bane_player_id
+	LEFT JOIN #temp_eqg_total eq
+		ON pl.id = eq.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.salaries_for_modeling sal
+		ON pl.id = sal.id
+		--AND sal.salaries NOT IN ('Injured','Pre-2011')
+	LEFT JOIN #temp_injured_salaries_one_row sa
+		ON pl.nfl_id = sa.nfl_player_id
+	LEFT JOIN AnalyticsScouting.dbo.overall_sequence_list seq
+		ON pl.id = seq.bane_player_id
+	LEFT JOIN #temp_pro_grades pg
+		ON pl.id = pg.bane_player_id
+	LEFT JOIN AnalyticsScouting.dbo.draft_pick_value_chart vc
+		ON pl.draft_number = vc.draft_number
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON pl.nfl_entry_club_id = cl.id
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON pl.ncaa_club_id = sc.id
+	LEFT JOIN #temp_college_grades cg
+		ON pl.id = cg.bane_player_id
+	LEFT JOIN #temp_allstar_grades asg
+		ON pl.id = asg.bane_player_id
+	LEFT JOIN Analytics.dbo.analysis_players_draft_model_grades mg
+		ON pl.id = mg.bane_player_id
+		AND mg.draft_model_year = 2018
+		AND mg.draft_model_version = 'POST_COMBINE'
+		AND mg.secondary_position = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.grades mgr
+		ON mg.model_with_board_grade_id = mgr.id
+	LEFT JOIN [AnalyticsWork].[dbo].[rd2_draft_pickvalue] pv
+		ON pl.draft_number = pv.DN
+		AND pv.report_season = 2017
+		AND pv.report_week = 17
+		AND pv.latest = 1
+	LEFT JOIN [AnalyticsWork].[dbo].[rd2_draft_pickvalue_fifth_year_option] pvo
+		ON pl.draft_number = pvo.DN
+	WHERE pl.is_deleted = 0
+
+
+	/*
+	insert into Analytics.dbo.work_r_input_draft_buckets
+	select *
+	from #temp_draft_info
+	where (draft_year >= 2012)
+	*/
+	
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the average and stdev pct of cap for each grade / position bucket.
+
+OUTPUT TABLES:
+#temp_average_by_pos_grade
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_average_by_pos_grade exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_average_by_pos_grade') IS NOT NULL
+	DROP TABLE #temp_average_by_pos_grade
+
+	SELECT position
+		,board_grade
+		,grade_order
+		,COUNT(pct_of_cap) AS pct_of_cap_count
+		,AVG(pct_of_cap) AS pct_of_cap_avg
+		,VAR(pct_of_cap) AS pct_of_cap_variance
+		,STDEV(pct_of_cap) AS pct_of_cap_stdev
+	INTO #temp_average_by_pos_grade
+	FROM #temp_draft_info
+	GROUP BY position
+		,board_grade
+		,grade_order
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Use the average and pct of cap to dinf out if it was a good "evaluation"
+
+OUTPUT TABLES:
+#temp_draft_with_evaluation
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_with_evaluation exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_with_evaluation') IS NOT NULL
+	DROP TABLE #temp_draft_with_evaluation
+
+	SELECT di.*
+		,CASE WHEN pct_of_cap >= agb.pct_of_cap_avg AND pct_of_cap <= aga.pct_of_cap_avg THEN 1 WHEN pct_of_cap IS NULL THEN NULL ELSE 0 END AS correct_evaluation
+		,CASE WHEN pct_of_cap >= agb.pct_of_cap_avg THEN 1 WHEN pct_of_cap IS NULL THEN NULL ELSE 0 END AS good_evaluation
+		,ABS(pct_of_cap - ags.pct_of_cap_avg) AS pct_of_cap_difference
+		,CASE WHEN pct_of_cap IS NULL THEN NULL ELSE RANK() OVER (PARTITION BY di.position, draft_year ORDER BY pct_of_cap DESC) END AS ideal_rank_position
+		,CASE WHEN sequence_rank_final IS NULL THEN NULL ELSE RANK() OVER (PARTITION BY di.position, draft_year ORDER BY sequence_rank_final) END AS board_rank_position
+		,CASE WHEN model_score IS NULL THEN NULL ELSE RANK() OVER (PARTITION BY di.position, draft_year ORDER BY model_score DESC) END AS model_rank_position
+		,CASE WHEN pct_of_cap IS NULL THEN NULL ELSE RANK() OVER (PARTITION BY draft_year ORDER BY pct_of_cap DESC) END AS ideal_rank
+		,CASE WHEN sequence_rank_final IS NULL THEN NULL ELSE RANK() OVER (PARTITION BY draft_year ORDER BY sequence_rank_final) END AS board_rank
+		,CASE WHEN model_score IS NULL THEN NULL ELSE RANK() OVER (PARTITION BY draft_year ORDER BY model_score DESC) END AS model_rank
+	--INTO #temp_draft_with_evaluation
+	FROM #temp_draft_info di
+	LEFT JOIN #temp_average_by_pos_grade ags
+		ON di.position = ags.position
+		AND di.grade_order = ags.grade_order
+	LEFT JOIN #temp_average_by_pos_grade aga
+		ON di.position = aga.position
+		AND di.grade_order = aga.grade_order - 1
+	LEFT JOIN #temp_average_by_pos_grade agb
+		ON di.position = agb.position
+		AND di.grade_order = agb.grade_order + 1
+	WHERE di.board_grade IS NOT NULL
+		AND draft_year >= 2005
