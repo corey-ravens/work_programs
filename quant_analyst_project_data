@@ -1,0 +1,269 @@
+
+
+
+
+	SELECT case when an.[gsis_game_key] = 57171 THEN 8
+			when an.[gsis_game_key] = 57192 THEN 13
+			when an.[gsis_game_key] = 57203 THEN 39
+			when an.[gsis_game_key] = 57230 THEN 56
+		END AS game_id
+		,an.[gsis_play_id] AS play_id
+		,[week]
+		,CASE WHEN [team_offense] = 'BLT' THEN 'JOKERS'
+			WHEN [team_offense] = 'WAS' THEN 'BATMEN'
+			WHEN [team_offense] = 'MIA' THEN 'RIDDLERS'
+			WHEN [team_offense] = 'BUF' THEN 'SCARECROWS'
+			WHEN [team_offense] = 'NO' THEN 'CATWOMEN'
+		END AS [team_offense]
+		,CASE WHEN [team_defense] = 'BLT' THEN 'JOKERS'
+			WHEN [team_defense] = 'WAS' THEN 'BATMEN'
+			WHEN [team_defense] = 'MIA' THEN 'RIDDLERS'
+			WHEN [team_defense] = 'BUF' THEN 'SCARECROWS'
+			WHEN [team_defense] = 'NO' THEN 'CATWOMEN'
+		END AS [team_defense]
+		,co.[down]
+		,co.[distance]
+		,co.[quarter]
+		,game_clock_counting_up_pff AS game_clock_counting_up
+		,[yards_from_opponent_end_zone_start]
+		,[hash_mark_offense]
+		,[score_differential_defense]
+		,[middle_of_field_shown]
+		,[middle_of_field_played]
+		,[offensive_formation_group]
+		,[offensive_personnel_basic]
+		,[rb_alignment]
+		,[te_alignment]
+		,[dropback_depth]
+		,[air_yards]      
+		,[pass_width]
+		,[pass_result]
+		,[incompletion_type]
+		,[targeted_route_simple]
+		,[time_to_pressure]
+		,[time_to_throw]
+		,[penalty_pff_play] AS penalty_on_play
+		,[penalty_yards_pff_play] AS penalty_yards
+		,[net_yards_play]
+		,[yards_until_potential_tackle_play]
+		,[receiving_yards_play]
+		,[rushing_yards_play]
+		,[first_down_achieved]
+		,[run_point_of_attack_intended]
+		,[run_point_of_attack_actual]
+		,[is_no_play]
+		,[is_two_point_conversion]
+		,[is_qb_kneel]
+		,[is_qb_spike]
+		,[is_no_huddle]
+		,[is_pistol]
+		,[is_shotgun]
+		,[is_pass]
+		,[is_run]
+		,[is_play_action]
+		,[is_rollout]
+		,[is_scramble]
+		,[is_draw]
+		,[is_screen]
+		,[is_option]
+		,[is_trick_play]
+		,[is_special_teams]
+		,plf.XPchange AS expected_points_change
+	FROM [Analytics].[dbo].[stage_plays_play_ancillary] an
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_context] co
+		ON an.pff_play_id = co.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_defensive_alignment] da
+		ON an.pff_play_id = da.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_offensive_alignment] oa
+		ON an.pff_play_id = oa.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_pass] pa
+		ON an.pff_play_id = pa.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_pass_rush] pr
+		ON an.pff_play_id = pr.pff_play_id
+	LEFT JOIN [Analytics].[dbo].[stage_plays_play_penalty] pen
+		ON an.pff_play_id = pen.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_results] res
+		ON an.pff_play_id = res.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_run] run
+		ON an.pff_play_id = run.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_play_type] ty
+		ON an.pff_play_id = ty.pff_play_id
+	LEFT JOIN AnalyticsWork.dbo.rd_playfact plf
+		ON an.gsis_game_key = plf.GameKey
+		AND an.gsis_play_id = plf.PlayID
+	WHERE season_type = 'PRE'
+		AND an.season = 2017
+		AND an.gsis_game_key IN (57171,57192,57203,57230)
+
+
+
+
+
+
+
+	SELECT case when an.[gsis_game_key] = 57171 THEN 8
+			when an.[gsis_game_key] = 57192 THEN 13
+			when an.[gsis_game_key] = 57203 THEN 39
+			when an.[gsis_game_key] = 57230 THEN 56
+		END AS game_id
+		,an.[gsis_play_id] AS play_id
+		,CASE WHEN [team] = 'BLT' THEN 'JOKERS'
+			WHEN [team] = 'WAS' THEN 'BATMEN'
+			WHEN [team] = 'MIA' THEN 'RIDDLERS'
+			WHEN [team] = 'BUF' THEN 'SCARECROWS'
+			WHEN [team] = 'NO' THEN 'CATWOMEN'
+		END AS [team_offense]
+		,map.[mapped_player_id] AS player_id
+		,[position_nfl_depth] AS position_depth_chart
+		,position_blt AS position_play
+		,[role_pff] AS [role]
+		,[technique_code_with_side] AS def_technique
+		,[align_side]
+		,[align_in_box]
+		,[align_depth]
+		,[align_in_press]
+	
+		,[offensive_position_covered_at_snap]
+		,map2.[mapped_player_id] AS offensive_player_id_covered_at_snap
+		,[pff_grade_normalized] AS play_grade_blt		
+		,[targeted_defender_primary]
+		,[targeted_defender_secondary]
+		,[completion_allowed]
+		,[drop_by_covered_receiver]
+		,[pass_break_up_brv]
+		,[interception]
+		,[dropped_interception]
+
+		,[qb_pressure]
+		,[qb_sack]
+		,[qb_hit]
+		,[qb_hurry]
+		,[batted_pass]		
+		,[tackle]
+		,[assist]
+		,[stop_brv]
+		,[tackle_for_loss]
+		,[missed_tackle]
+		,[first_contact]
+		,[first_contact_when_blocked]
+		,[fumble_forced]
+		,[fumble_recovered]
+		,[penalty_type_nfl] AS penalty_type
+	FROM [Analytics].[dbo].[stage_plays_play_ancillary] an 
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_defensive_alignment] da
+		ON an.pff_play_id = da.pff_play_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_coverage] cov
+		ON da.pff_pp_id = cov.pff_pp_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_grade_defense] gr
+		ON da.pff_pp_id = gr.pff_pp_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_pass_rush] pr
+		ON da.pff_pp_id = pr.pff_pp_id
+	LEFT JOIN [Analytics].[dbo].[stage_plays_player_penalty] pen
+		ON da.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_tackle] ta
+		ON da.pff_pp_id = ta.pff_pp_id
+	INNER JOIN [AnalyticsWork].[dbo].[__mapped_player_ids_project] map
+		ON da.nfl_player_id = map.player_id
+	LEFT JOIN [AnalyticsWork].[dbo].[__mapped_player_ids_project] map2
+		ON da.[offensive_gsis_player_id_covered_at_snap] = map2.player_id
+	WHERE season_type = 'PRE'
+		AND an.season = 2017
+		AND an.gsis_game_key IN (57171,57192,57203,57230)
+
+
+
+
+
+	SELECT case when an.[gsis_game_key] = 57171 THEN 8
+			when an.[gsis_game_key] = 57192 THEN 13
+			when an.[gsis_game_key] = 57203 THEN 39
+			when an.[gsis_game_key] = 57230 THEN 56
+		END AS game_id
+		,an.[gsis_play_id] AS play_id
+		,CASE WHEN [team] = 'BLT' THEN 'JOKERS'
+			WHEN [team] = 'WAS' THEN 'BATMEN'
+			WHEN [team] = 'MIA' THEN 'RIDDLERS'
+			WHEN [team] = 'BUF' THEN 'SCARECROWS'
+			WHEN [team] = 'NO' THEN 'CATWOMEN'
+		END AS [team_offense]
+		,map.[mapped_player_id] AS player_id
+		,[position_nfl_depth] AS position_depth_chart
+		,position_blt AS position_play
+		,[role_pff] AS [role]
+		,[passer]
+		,[ballcarrier]
+		,[receiver_type]
+		,[stance]
+		,[split_from_middle_of_field]
+		,[bunched]
+		,[motion]
+		,[on_line_of_scrimmage]
+		,[pressed]
+		,[covered_by_position]
+		,map2.[mapped_player_id] AS covered_by_player_id
+		,[align_side]
+		,[qb_pressure_allowed]
+		,[qb_sack_allowed]
+		,[qb_hit_allowed]
+		,[qb_hurry_allowed]
+
+		,[passing_attempt]
+		
+		,[passing_completion]
+		,[passing_yards]
+
+		,[passing_drop]
+		,[passing_drop_yards]
+		,[passing_air_yards]
+		,[passing_touchdown]
+		,[passing_dropped_touchdown]
+		,[passing_interception]
+		,[passing_dropped_interception]
+		,[passing_sack]
+		,[passing_sack_yards]
+		,[passing_fumble]
+		,[passing_batted_pass]			
+
+		,[route_type_pff] AS route_type
+		,[route_name_pff] AS route_name
+		,[route_depth]
+		,[targeted_receiver]
+		,[targeted_receiver_catchable]
+		,[reception]
+		,[dropped_pass]
+		,[receiving_yards]
+		,[receiving_yards_after_catch]
+		,[receiving_fumble]
+		,[receiving_touchdown]
+		,[receiving_tackle_avoided]
+		,[receiving_interception]
+		,[running_yards]
+		,[running_yards_after_contact]
+		,[running_fumble]
+		,[running_touchdown]
+		,[running_tackle_avoided]		
+		,[pff_grade_normalized] AS play_grade_blt
+		,[penalty_type_nfl] AS penalty_type
+	FROM [Analytics].[dbo].[stage_plays_play_ancillary] an 
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_offensive_alignment] da
+		ON an.pff_play_id = da.pff_play_id
+	LEFT JOIN [Analytics].[dbo].[stage_plays_player_penalty] pen
+		ON da.pff_pp_id = pen.pff_pp_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_pass_block] pb
+		ON da.pff_pp_id = pb.pff_pp_id
+	INNER JOIN[Analytics].[dbo].[stage_plays_player_passing] pas
+		ON da.pff_pp_id = pas.pff_pp_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_receiving] re
+		ON da.pff_pp_id = re.pff_pp_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_grade_offense] gr
+		ON da.pff_pp_id = gr.pff_pp_id
+	INNER JOIN [Analytics].[dbo].[stage_plays_player_running] ru
+		ON da.pff_pp_id = ru.pff_pp_id
+	INNER JOIN [AnalyticsWork].[dbo].[__mapped_player_ids_project] map
+		ON da.nfl_player_id = map.player_id
+	LEFT JOIN [AnalyticsWork].[dbo].[__mapped_player_ids_project] map2
+		ON da.[covered_by_gsis_player_id] = map2.player_id
+	WHERE season_type = 'PRE'
+		AND an.season = 2017
+		AND an.gsis_game_key IN (57171,57192,57203,57230)
+
