@@ -1,0 +1,164 @@
+
+
+-- Check if #temp_gpa_reports exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_gpa_reports') IS NOT NULL
+	DROP TABLE #temp_gpa_reports
+
+	SELECT re.id AS report_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,pl.id AS bane_player_id
+		,UPPER(CONCAT(LEFT(us.first_name,1),LEFT(us.last_name,3))) AS scout
+		,sk.code
+		,sk.[name]
+		,CAST(gr.[value] AS FLOAT) AS [value]
+		,'report' AS gpa_type
+	INTO #temp_gpa_reports
+	FROM BaneProductionAnalytics.dbo.reports re
+	INNER JOIN BaneProductionAnalytics.dbo.evaluations ev
+		ON re.id = ev.report_id
+		AND ev.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.skills sk
+		ON ev.skill_id = sk.id
+	INNER JOIN BaneProductionAnalytics.dbo.users us
+		ON re.author_id = us.id
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON re.player_id = pl.id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.grades gr
+		ON ev.grade_id = gr.id
+	WHERE [code] IN ('I-OF'
+		,'I-RAVMEN'
+		,'I-PRIDE'
+		,'I-GRIT'
+		,'I-TF'
+		,'I-MA'
+		,'TF'
+		,'INT-RM'
+		,'INT-PRIDE'
+		,'INT-GRIT'
+		,'INT-MA'
+		,'INT-OFF'
+		)
+		AND gr.value IN ('3','4','5','6','7')
+		AND pl.draft_year = 2021
+		AND re.is_deleted = 0
+
+
+-- Check if #temp_gpa_interviews exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_gpa_interviews') IS NOT NULL
+	DROP TABLE #temp_gpa_interviews
+
+	SELECT re.id AS report_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,pl.id AS bane_player_id
+		,UPPER(CONCAT(LEFT(us.first_name,1),LEFT(us.last_name,3))) AS scout
+		,sk.code
+		,sk.[name]
+		,CAST(gr.[value] AS FLOAT) AS [value]
+		,'interview' AS gpa_type
+	INTO #temp_gpa_interviews
+	FROM BaneProductionAnalytics.dbo.interviews re
+	INNER JOIN BaneProductionAnalytics.dbo.evaluations ev
+		ON re.id = ev.interview_id
+		AND ev.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.skills sk
+		ON ev.skill_id = sk.id
+	INNER JOIN BaneProductionAnalytics.dbo.users us
+		ON re.author_id = us.id
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON re.player_id = pl.id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.grades gr
+		ON ev.grade_id = gr.id
+	WHERE pl.draft_year = 2021
+		AND gr.value IN ('3','4','5','6','7')
+
+-- Check if #temp_gpa_pivots exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_gpa_pivots') IS NOT NULL
+	DROP TABLE #temp_gpa_pivots
+
+    SELECT player
+		,bane_player_id
+		--,scout
+		,gpa_type
+		,[TF]
+		,[INT-OFF]
+		,[INT-GRIT]
+		,[INT-RM]
+		,[INT-PRIDE]
+		,[INT-MA]
+				,CASE WHEN [INT-OFF] <= 4 THEN (ISNULL([TF],0) + ISNULL([INT-OFF],0) + ISNULL([INT-GRIT],0) + ISNULL([INT-RM],0) + ISNULL([INT-PRIDE],0)) 
+				/ NULLIF((CASE WHEN [TF] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [INT-OFF] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [INT-GRIT] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [INT-RM] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [INT-PRIDE] IS NOT NULL THEN 1 ELSE 0 END),0)
+			ELSE (ISNULL([TF],0) + ISNULL([INT-GRIT],0) + ISNULL([INT-RM],0) + ISNULL([INT-PRIDE],0)) 
+				/ NULLIF((CASE WHEN [TF] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [INT-GRIT] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [INT-RM] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [INT-PRIDE] IS NOT NULL THEN 1 ELSE 0 END),0)
+		END AS score
+	INTO #temp_gpa_pivots
+	FROM (
+		SELECT player
+			,bane_player_id
+			--,scout
+			,gpa_type
+			,code
+			,[value]
+	FROM #temp_gpa_interviews WHERE code IN ('TF','INT-OFF','INT-GRIT','INT-RM','INT-PRIDE','INT-MA')) up
+    PIVOT (AVG([value]) FOR code IN ([TF],[INT-OFF],[INT-GRIT],[INT-RM],[INT-PRIDE],[INT-MA])) AS pvt
+
+
+	INSERT INTO #temp_gpa_pivots
+    SELECT player
+		,bane_player_id
+		--,scout
+		,gpa_type
+		,[I-TF] AS [TF]
+		,[I-OF] AS [INT-OFF]
+		,[I-GRIT] AS [INT-GRIT]
+		,[I-RAVMEN] AS [INT-RM]
+		,[I-PRIDE] AS [INT-PRIDE]
+		,[I-MA] AS [INT-MA]
+		,CASE WHEN [I-OF] <= 4 THEN (ISNULL([I-TF],0) + ISNULL([I-OF],0) + ISNULL([I-GRIT],0) + ISNULL([I-RAVMEN],0) + ISNULL([I-PRIDE],0)) 
+				/ NULLIF((CASE WHEN [I-TF] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [I-OF] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [I-GRIT] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [I-RAVMEN] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [I-PRIDE] IS NOT NULL THEN 1 ELSE 0 END),0)
+			ELSE (ISNULL([I-TF],0) + ISNULL([I-GRIT],0) + ISNULL([I-RAVMEN],0) + ISNULL([I-PRIDE],0))
+				/ NULLIF((CASE WHEN [I-TF] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [I-GRIT] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [I-RAVMEN] IS NOT NULL THEN 1 ELSE 0 END
+				+ CASE WHEN [I-PRIDE] IS NOT NULL THEN 1 ELSE 0 END),0)
+		END AS score
+	FROM (
+		SELECT player
+			,bane_player_id
+			--,scout
+			,gpa_type
+			,code
+			,[value]
+	FROM #temp_gpa_reports WHERE code IN ('I-OF','I-RAVMEN','I-PRIDE','I-GRIT','I-TF','I-MA')) up
+    PIVOT (AVG([value]) FOR code IN ([I-OF],[I-RAVMEN],[I-PRIDE],[I-GRIT],[I-TF],[I-MA])) AS pvt
+
+
+	SELECT ISNULL(re.bane_player_id,ii.bane_player_id) AS bane_player_id
+		,ISNULL(re.player,ii.player) AS player
+		,re.score AS report_score
+		,ii.score AS interview_score
+		,CASE WHEN re.score IS NOT NULL AND ii.score IS NOT NULL THEN 0.7 * re.score + 0.3 * ii.score
+			WHEN re.score IS NOT NULL THEN re.score
+			WHEN ii.score IS NOT NULL THEN ii.score
+			ELSE NULL
+		END AS score_combined
+	FROM #temp_gpa_pivots re
+	FULL OUTER JOIN	#temp_gpa_pivots ii
+		ON re.bane_player_id = ii.bane_player_id
+		AND ii.gpa_type = 'interview'
+	WHERE re.gpa_type = 'report'
+
+
+
