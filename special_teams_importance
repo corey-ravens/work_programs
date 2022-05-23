@@ -1,0 +1,266 @@
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a list of plays form the last few seasons. Offense, defense, and special teams.
+
+OUTPUT TABLES:
+#temp_play_list
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_play_list exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_list') IS NOT NULL
+	DROP TABLE #temp_play_list
+
+	SELECT an.season
+		,[week]
+		,an.pff_play_id
+		,team_offense
+		,team_defense
+		,co.[quarter]
+		,co.game_clock_counting_up_nfl
+		,co.down
+		,co.distance
+		,is_run
+		,is_pass
+		,is_two_point_conversion
+		,is_special_teams
+		,CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'EXTRA POINT' THEN 1 ELSE 0 END AS is_extra_point
+		,CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'FIELD GOAL' THEN 1 ELSE 0 END AS is_field_goal
+		,CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'KICKOFF' THEN 1 ELSE 0 END AS is_kickoff
+		,CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'PUNT' THEN 1 ELSE 0 END AS is_punt
+		,CAST([XPchange] AS FLOAT) AS expected_points_change
+	INTO #temp_play_list
+	FROM Analytics.dbo.stage_plays_play_ancillary an
+	INNER JOIN Analytics.dbo.stage_plays_play_context co
+		ON an.pff_play_id = co.pff_play_id
+	INNER JOIN Analytics.dbo.stage_plays_play_type ty		
+		ON an.pff_play_id = ty.pff_play_id	
+	INNER JOIN Analytics.dbo.stage_plays_play_results re
+		ON re.pff_play_id = an.pff_play_id
+	INNER JOIN AnalyticsWork.dbo.rd_playfact pf		
+		ON an.gsis_play_id = pf.PlayID	
+		AND an.gsis_game_key = pf.GameKey
+	INNER JOIN PFF.dbo.PffPlays pff		
+		ON co.pff_play_id = pff_PLAYID
+	WHERE UPPER(an.season_type) = 'REG'	
+		AND is_qb_kneel = 0
+		AND is_qb_spike = 0
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the player play information on the spcial teams plays
+
+OUTPUT TABLES:
+#temp_player_play_list_special_teams
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_play_list_special_teams exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_play_list_special_teams') IS NOT NULL
+	DROP TABLE #temp_player_play_list_special_teams
+
+	SELECT pl.*
+	FROM #temp_play_list pl
+	INNER JOIN Pff.dbo.PFFSpecial st
+		ON pl.pff_play_id = st.pff_PLAYID
+
+		
+
+
+
+
+
+
+
+
+SELECT team_offense AS team		
+	,an.season	
+	,AVG(CAST([XPchange] AS FLOAT)) AS xp_change_off	
+	,AVG(CASE WHEN is_run = 1 THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_run_off	
+	,AVG(CASE WHEN is_pass = 1 THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_pass_off	
+INTO #temp_offense		
+FROM Analytics.dbo.stage_plays_play_context co		
+INNER JOIN Analytics.dbo.stage_plays_play_ancillary an		
+	ON co.pff_play_id = an.pff_play_id	
+INNER JOIN AnalyticsWork.dbo.rd_playfact pf		
+	ON an.gsis_play_id = pf.PlayID	
+	AND an.gsis_game_key = pf.GameKey	
+INNER JOIN Analytics.dbo.stage_plays_play_type ty		
+	ON co.pff_play_id = ty.pff_play_id	
+WHERE is_qb_kneel = 0		
+	AND UPPER(an.season_type) = 'REG'	
+	AND is_special_teams = 0	
+	--AND [XPchange_Z] NOT IN ('Inf','-Inf')	
+GROUP BY team_offense		
+	,an.season	
+		
+		
+SELECT team_defense AS team		
+	,an.season	
+	,AVG(CAST([XPchange] AS FLOAT)) AS xp_change_def	
+	,AVG(CASE WHEN is_run = 1 THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_run_def	
+	,AVG(CASE WHEN is_pass = 1 THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_pass_def	
+INTO #temp_defense		
+FROM Analytics.dbo.stage_plays_play_context co		
+INNER JOIN Analytics.dbo.stage_plays_play_ancillary an		
+	ON co.pff_play_id = an.pff_play_id	
+INNER JOIN AnalyticsWork.dbo.rd_playfact pf		
+	ON an.gsis_play_id = pf.PlayID	
+	AND an.gsis_game_key = pf.GameKey	
+INNER JOIN Analytics.dbo.stage_plays_play_type ty		
+	ON co.pff_play_id = ty.pff_play_id	
+WHERE is_qb_kneel = 0		
+	AND UPPER(an.season_type) = 'REG'	
+	AND is_special_teams = 0	
+	--AND [XPchange_Z] NOT IN ('Inf','-Inf')	
+GROUP BY team_defense		
+	,an.season	
+		
+		
+		
+SELECT team_offense AS team		
+	,an.season	
+	,AVG(CAST([XPchange] AS FLOAT)) AS xp_change_st_off	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'KICKOFF' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_kick_return	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'PUNT' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_punt_return	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'FIELD GOAL' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_fg	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'EXTRA POINT' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_ex	
+INTO #temp_spec_teams_off		
+FROM Analytics.dbo.stage_plays_play_context co		
+INNER JOIN Analytics.dbo.stage_plays_play_ancillary an		
+	ON co.pff_play_id = an.pff_play_id	
+INNER JOIN AnalyticsWork.dbo.rd_playfact pf		
+	ON an.gsis_play_id = pf.PlayID	
+	AND an.gsis_game_key = pf.GameKey	
+INNER JOIN Analytics.dbo.stage_plays_play_type ty		
+	ON co.pff_play_id = ty.pff_play_id	
+INNER JOIN PFF.dbo.PffPlays pff		
+	ON co.pff_play_id = pff_PLAYID	
+WHERE is_qb_kneel = 0		
+	AND UPPER(an.season_type) = 'REG'	
+	AND is_special_teams = 1	
+	--AND [XPchange_Z] NOT IN ('Inf','-Inf')	
+GROUP BY team_offense		
+	,an.season	
+		
+		
+		
+		
+SELECT team_defense AS team		
+	,an.season	
+	,AVG(CAST([XPchange] AS FLOAT)) AS xp_change_st_def	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'KICKOFF' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_kickoff	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'PUNT' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_punt	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'FIELD GOAL' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_fg_block	
+	,AVG(CASE WHEN RTRIM(LTRIM(UPPER(pff_SPECIALTEAMSTYPE))) = 'EXTRA POINT' THEN CAST([XPchange] AS FLOAT) ELSE NULL END) AS xp_change_ex_block	
+INTO #temp_spec_teams_def		
+FROM Analytics.dbo.stage_plays_play_context co		
+INNER JOIN Analytics.dbo.stage_plays_play_ancillary an		
+	ON co.pff_play_id = an.pff_play_id	
+INNER JOIN AnalyticsWork.dbo.rd_playfact pf		
+	ON an.gsis_play_id = pf.PlayID	
+	AND an.gsis_game_key = pf.GameKey	
+INNER JOIN Analytics.dbo.stage_plays_play_type ty		
+	ON co.pff_play_id = ty.pff_play_id	
+INNER JOIN PFF.dbo.PffPlays pff		
+	ON co.pff_play_id = pff_PLAYID	
+WHERE is_qb_kneel = 0		
+	AND UPPER(an.season_type) = 'REG'	
+	AND is_special_teams = 1	
+	--AND [XPchange_Z] NOT IN ('Inf','-Inf')	
+GROUP BY team_defense		
+	,an.season	
+		
+		
+		
+		
+		
+DROP TABLE #temp_results		
+		
+SELECT pg.nfl_game_key		
+	,pg.season	
+	,cl.code AS TEAM	
+	,CASE WHEN home_team_score > away_team_score THEN 1	
+		WHEN home_team_score < away_team_score THEN 0
+		WHEN home_team_score = away_team_score THEN 0.5
+		ELSE NULL
+	END AS result	
+INTO #temp_results		
+FROM BaneProductionAnalytics.dbo.pro_games pg		
+INNER JOIN ProDB.dbo.Club nc		
+	ON pg.home_team_nfl_club_key = nc.ClubKey	
+INNER JOIN BaneProductionAnalytics.dbo.clubs cl		
+	ON nc.ClubID = cl.nfl_club_id	
+	AND cl.is_disabled = 0	
+INNER JOIN [Analytics].[dbo].[stage_games_pff] pf		
+	ON pg.nfl_game_key = pf.nfl_game_key	
+WHERE pg.season BETWEEN 2013 AND 2017		
+	AND UPPER(pg.season_type) = 'REG'	
+		
+INSERT INTO #temp_results		
+SELECT pg.nfl_game_key		
+	,pg.season	
+	,cl.code AS team	
+	,CASE WHEN home_team_score < away_team_score THEN 1	
+		WHEN home_team_score > away_team_score THEN 0
+		WHEN home_team_score = away_team_score THEN 0.5
+		ELSE NULL
+	END AS result	
+FROM BaneProductionAnalytics.dbo.pro_games pg		
+INNER JOIN ProDB.dbo.Club nc		
+	ON pg.away_team_nfl_club_key = nc.ClubKey	
+INNER JOIN BaneProductionAnalytics.dbo.clubs cl		
+	ON nc.ClubID = cl.nfl_club_id	
+	AND cl.is_disabled = 0	
+INNER JOIN [Analytics].[dbo].[stage_games_pff] pf		
+	ON pg.nfl_game_key = pf.nfl_game_key	
+WHERE pg.season BETWEEN 2013 AND 2017		
+	AND UPPER(pg.season_type) = 'REG'	
+		
+		
+SELECT season		
+	,team	
+	,SUM(result) AS wins	
+INTO #temp_season_win_pct		
+FROM #temp_results		
+GROUP BY season		
+	,team	
+		
+		
+SELECT def.team 		
+	,def.season	
+	,xp_change_run_off	
+	,xp_change_pass_off	
+	,xp_change_run_def	
+	,xp_change_pass_def	
+	,xp_change_kick_return	
+	,xp_change_punt_return	
+	,xp_change_fg	
+	,xp_change_ex	
+	,xp_change_kickoff	
+	,xp_change_punt	
+	,xp_change_fg_block	
+	,xp_change_ex_block	
+	,xp_change_off	
+	,xp_change_def	
+	,xp_change_st_def	
+	,xp_change_st_off	
+	,wins	
+FROM #temp_defense def		
+INNER JOIN #temp_offense ofn		
+	ON def.team = ofn.team	
+	AND def.season = ofn.season	
+INNER JOIN #temp_spec_teams_def std		
+	ON def.team = std.team	
+	AND def.season = std.season	
+INNER JOIN #temp_spec_teams_off sto		
+	ON def.team = sto.team	
+	AND def.season = sto.season	
+INNER JOIN #temp_season_win_pct wp		
+	ON def.team = wp.team	
+	AND def.season = wp.season	
+
