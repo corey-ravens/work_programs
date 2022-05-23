@@ -1,0 +1,66 @@
+
+
+
+
+
+
+
+-- Check if #temp_st_play_count exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_st_play_count') IS NOT NULL
+	DROP TABLE #temp_st_play_count
+
+	SELECT gsis_player_id AS ncaa_gsis_player_id
+		,player_name AS player_name_pff
+		,COUNT(*) AS st_plays
+	INTO #temp_st_play_count
+	FROM CFFUltimate.dbo.special st
+	INNER JOIN CFFUltimate.dbo.plays pl
+		ON st.play_id = pl.play_id
+	WHERE season = 2021
+	GROUP BY gsis_player_id
+		,player_name
+		
+
+-- Check if #temp_max_college_grade exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_max_college_grade') IS NOT NULL
+	DROP TABLE #temp_max_college_grade
+
+	SELECT re.player_id AS bane_player_id	
+		,MAX(CAST(gr.[value] AS NUMERIC(3,1))) AS college_grade
+	INTO #temp_max_college_grade
+	FROM [BaneProductionAnalytics].dbo.reports re
+	LEFT JOIN [BaneProductionAnalytics].dbo.grades gr
+		ON ISNULL(re.revised_overall_grade_id,re.grade_id) = gr.id
+	WHERE re.[type] IN ('fall','cross-check','post cc')
+		AND re.is_deleted = 0
+	GROUP BY re.player_id
+
+
+
+
+	SELECT --CONCAT(last_name,', ',goes_by) AS player
+		player_name_pff
+		,sc.code
+		,po.translation
+		,cg.college_grade
+		,st.st_plays
+	FROM BaneProductionAnalytics.dbo.players pl
+	INNER JOIN  #temp_max_college_grade cg
+		ON pl.id = cg.bane_player_id
+	INNER JOIN BaneProductionAnalytics.dbo.schools sc
+		ON pl.ncaa_club_id = sc.id
+	INNER JOIN BaneProductionAnalytics.dbo.positions po	
+		ON pl.position_id = po.id
+	INNER JOIN #temp_st_play_count st
+		ON pl.ncaa_gsis_id = st.ncaa_gsis_player_id
+	WHERE pl.is_deleted = 0
+		AND draft_year >= 2021
+		AND cg.college_grade >= 5.0
+		AND st.st_plays >= 5
+	ORDER BY sc.code
+		,CONCAT(last_name,', ',goes_by)
+
+
+
+
+
