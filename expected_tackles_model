@@ -1,0 +1,93 @@
+
+
+
+
+-- Check if #temp_plays exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_plays') IS NOT NULL
+	DROP TABLE #temp_plays
+
+	SELECT de.player_participation_id AS pff_pp_id
+		,de.play_id AS pff_play_id
+		,de.gsis_game_id AS pff_GSISGAMEKEY
+		,de.gsis_play_id AS pff_GSISGSISPLAYID
+		,de.gsis_player_id AS pff_GSISPLAYERID
+		,de.player_name AS pff_PLAYERNAME
+		,pl.season AS pff_GAMESEASON
+		,de.position AS position_blt
+		,de.defensive_technique AS pff_DEFTECHNIQUE
+		,CASE WHEN de.tackle = 'TRUE' THEN 1 ELSE 0 END AS tackle_for_model
+		,CAST(de.player_depth AS FLOAT) AS pff_PLAYERDEPTH
+		,pl.distance
+		,pl.down
+		,pl.field_position AS pff_FIELDPOSITION
+		,pl.running_back_direction AS play_side
+		,pl.primary_run_concept AS run_concept_primary
+		,CASE WHEN pl.actual_poa = 'LEFT END' THEN 'LE'
+			WHEN pl.actual_poa = 'LEFT GUARD' THEN 'LG'
+			WHEN pl.actual_poa = 'LEFT TACKLE' THEN 'LT'
+			WHEN pl.actual_poa = 'RIGHT END' THEN 'RE'
+			WHEN pl.actual_poa = 'RIGHT GUARD' THEN 'RG'
+			WHEN pl.actual_poa = 'RIGHT TACKLE' THEN 'RT'
+			WHEN pl.actual_poa = 'MIDDLE LEFT' THEN 'ML'
+			WHEN pl.actual_poa = 'MIDDLE RIGHT' THEN 'MR'
+		ELSE pl.actual_poa 
+		END AS run_point_of_attack_actual
+		,oo.rushing_yards AS pff_RUSHINGYARDS
+		,oo.yards_after_contact AS pff_YARDSAFTERCONTACT
+		,CAST(oo.player_depth AS FLOAT) AS rb_depth
+		,oo.position AS rb_position
+		,oo.rushing_yards - oo.yards_after_contact AS yards_until_potential_tackle_play
+        ,CASE WHEN pl.field_position < 0 THEN 100 - ABS(pl.field_position) ELSE pl.field_position END AS yards_from_opponent_end_zone_start
+		,pl.field_position
+		,al.pff_position_align_side AS align_side
+		,dl.x_distance_to_ball
+		,dl.y_distance_to_ball
+		,rb.x_distance_to_ball AS x_rb
+		,rb.x_distance_to_ball AS rb_x
+		,rb.y_distance_to_ball AS y_rb
+		,rp.pff_DEFTECHNIQUE AS def_technique_equivalent
+		,dl2.x_distance_to_ball AS x_hole
+		,0 AS y_hole
+		,ISNULL(oo.player_depth * CAST(-1 AS FLOAT),rb.y_distance_to_ball) AS rb_y
+		,ISNULL(de.player_depth,dl.y_distance_to_ball) AS y_distance_to_ball2
+		,SQRT(SQUARE(dl.x_distance_to_ball - rb.x_distance_to_ball) + SQUARE(ISNULL(CAST(de.player_depth AS FLOAT),dl.y_distance_to_ball) - ISNULL(CAST(oo.player_depth AS FLOAT) * CAST(-1 AS FLOAT),rb.y_distance_to_ball))) AS dis_to_rb_at_snap
+		,SQRT(SQUARE(dl.x_distance_to_ball - dl2.x_distance_to_ball) + SQUARE(ISNULL(CAST(de.player_depth AS FLOAT),dl.y_distance_to_ball) - 0)) AS dis_to_rb_at_los
+	INTO #temp_plays
+	FROM CFFUltimate.dbo.defense de
+	INNER JOIN CFFUltimate.dbo.plays pl
+		ON de.play_id = pl.play_id
+		AND pl.run_pass = 'R'
+		AND pl.season  >= 2013 
+	INNER JOIN CFFUltimate.dbo.offense oo 
+		ON de.play_id = oo.play_id
+		AND oo.[role] = 'RUN'
+		AND oo.ball_carrier = 'TRUE'
+		AND oo.lateral IS NULL
+		AND oo.gsis_play_id IS NOT NULL
+	LEFT JOIN Analytics.dbo.map_pff_position_align_side al
+		ON de.position = al.pff_position
+	LEFT JOIN Analytics.dbo.map_pff_technique_to_location_pos_only dl
+		ON ISNULL(de.defensive_technique,de.position) = dl.pff_DEFTECHNIQUE
+	LEFT JOIN Analytics.dbo.map_pff_rb_position_to_location rb
+		ON oo.position = rb.pff_POSITION
+	LEFT JOIN Analytics.dbo.map_pff_rb_poa_to_deftechnique rp --instead of where rp.def_technique_equivalent is not null
+		ON pl.actual_poa = rp.pff_POAACTUAL
+	LEFT JOIN Analytics.dbo.map_pff_technique_to_location_pos_only dl2
+		ON rp.pff_DEFTECHNIQUE = dl2.pff_DEFTECHNIQUE
+	WHERE season >= 2013
+
+
+--every consecutive play 1,2 2,3, 3,1 etc.
+--r/p
+--side air yards
+--pre snap look formation personel
+--situational
+
+
+--what is it not going to be? decisino tree...eliminate things. dont need to try and figure out what it is, figure out what it isn't.
+--does our self scout do opposite side of ball or same side of the ball?
+--risk that is less risky for you then others, basketball
+--
+
+
+
