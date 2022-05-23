@@ -1,0 +1,45 @@
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+This program is for scoring the Shadow Draft
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+	SELECT sd.*
+	      ,cc.code AS team
+		  ,po.abbreviation AS position
+		  ,description_short AS current_status
+		  ,(elor.rating - cr.yellow)/(cr.green-cr.yellow) AS elo_od_rating_change
+		  ,(elos.rating - cs.yellow)/(cs.green-cs.yellow) / 3 AS elo_st_rating_change
+		  ,(elor.rating - cr.yellow)/(cr.green-cr.yellow) + ((elos.rating - cs.yellow)/(cs.green-cs.yellow) / 3) AS elo_rating_change
+	  FROM AnalyticsWork.dbo.shadow_draft sd
+INNER JOIN BaneProductionAnalytics.dbo.players pl
+        ON sd.bane_player_id = pl.id
+INNER JOIN BaneProductionAnalytics.dbo.users us
+        ON sd.scout_last_name = us.last_name
+       AND sd.scout_goes_by = us.goes_by
+ LEFT JOIN BaneProductionAnalytics.dbo.clubs cc
+        ON pl.current_club_id = cc.id
+ LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+        ON pl.ncaa_club_id = sc.id
+ LEFT JOIN BaneProductionAnalytics.dbo.positions po
+        ON pl.position_id = po.id
+ LEFT JOIN [BaneProductionAnalytics].dbo.statuses st
+	    ON pl.status_id = st.id
+ LEFT JOIN [Analytics].dbo.analysis_players_elo_ratings_regular elor
+	    ON pl.nfl_id = elor.nfl_player_id
+	   AND elor.season = 2016
+	   AND elor.[week] = 2
+ LEFT JOIN [Analytics].dbo.analysis_players_elo_ratings_special_teams elos
+	    ON pl.nfl_id = elos.nfl_player_id
+	   AND elos.season = 2016
+	   AND elos.[week] = 2
+ LEFT JOIN [Analytics].dbo.analysis_players_elo_color_cutoff_regular cr
+	    ON elor.season = cr.season
+	   AND elor.rating_group_key = cr.rating_group_key
+ LEFT JOIN [Analytics].dbo.analysis_players_elo_color_cutoff_special_teams cs
+	    ON elor.season = cs.season
+	   AND elor.rating_group_key = cs.rating_group_key
