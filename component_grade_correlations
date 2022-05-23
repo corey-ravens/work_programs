@@ -1,0 +1,326 @@
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+This is the code for creating the table to examine which position specific grades are most correlated.
+Can we remove/combine a few? Or add a few new ones in?
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with all the component (Position Specific, STICD, Critical Factor) grades
+
+OUTPUT TABLES:
+#temp_component_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+DECLARE @current_season INT
+SELECT @current_season = (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+
+-- Check if #temp_component_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_component_grades') IS NOT NULL
+	DROP TABLE #temp_component_grades
+
+    SELECT re.id AS report_id
+          ,author_id AS scout_id
+          ,re.player_id AS bane_player_id
+		  ,pl.draft_year
+		  ,translation AS position
+          ,ev.[id] AS evaluation_id
+		  ,CASE WHEN ev.skill_id IN (1370,1389,1439) THEN 1370
+			    WHEN ev.skill_id IN (1414,1418) THEN 1414
+				WHEN ev.skill_id IN (1448,1363) THEN 1448
+				WHEN ev.skill_id IN (1364,1449,1496) THEN 1364
+				WHEN ev.skill_id IN (1426,1446) THEN 1426
+				WHEN ev.skill_id IN (1401,1397) THEN 1401
+				WHEN ev.skill_id IN (1420,1400) THEN 1420
+				WHEN ev.skill_id IN (1416,1411) THEN 1416
+				WHEN ev.skill_id IN (1371,1386) THEN 1386
+				WHEN ev.skill_id IN (1374,1387) THEN 1387
+				WHEN ev.skill_id IN (1393,1451) THEN 1451
+				WHEN ev.skill_id IN (1369,1430) THEN 1369
+				WHEN ev.skill_id IN (1412,1429,1408) THEN 1412
+				ELSE ev.skill_id
+			END AS skill_id
+           ,CASE WHEN ev.skill_id IN (1370,1389,1439) THEN 'CF-CMP'
+                 WHEN ev.skill_id IN (1414,1418) THEN 'PS-PASS/R'
+                 WHEN ev.skill_id IN (1448,1363) THEN 'PS-BLOCK'
+                 WHEN ev.skill_id IN (1364,1449,1496) THEN 'PS-HNDS'
+                 WHEN ev.skill_id IN (1426,1446) THEN 'PS-PRESS/K/MENT'
+                 WHEN ev.skill_id IN (1401,1397) THEN 'PS-REL'
+                 WHEN ev.skill_id IN (1420,1400) THEN 'PS-SUS/RUNB'
+                 WHEN ev.skill_id IN (1416,1411) THEN 'PS-SHD/B/HNDS'
+				 WHEN ev.skill_id IN (1371,1386) THEN 'C'
+				 WHEN ev.skill_id IN (1374,1387) THEN 'D'
+				 WHEN ev.skill_id IN (1393,1451) THEN 'PS-PROD'
+				 WHEN ev.skill_id IN (1369,1430) THEN 'CF-SIZ'
+				 WHEN ev.skill_id IN (1412,1429,1408) THEN 'PS-TKL'
+                 ELSE sk.[code]
+            END AS skill_code
+           ,CASE WHEN ev.skill_id IN (1370,1389,1439) THEN 'critical factors'
+                 WHEN ev.skill_id IN (1414,1418) THEN 'position specifics'
+                 WHEN ev.skill_id IN (1448,1363) THEN 'position specifics'
+                 WHEN ev.skill_id IN (1364,1449,1496) THEN 'position specifics'
+                 WHEN ev.skill_id IN (1426,1446) THEN 'position specifics'
+                 WHEN ev.skill_id IN (1401,1397) THEN 'position specifics'
+                 WHEN ev.skill_id IN (1420,1400) THEN 'position specifics'
+                 WHEN ev.skill_id IN (1416,1411) THEN 'position specifics'
+				 WHEN ev.skill_id IN (1371,1386) THEN 'sticd'
+				 WHEN ev.skill_id IN (1374,1387) THEN 'sticd'
+				 WHEN ev.skill_id IN (1393,1451) THEN 'position specifics'
+				 WHEN ev.skill_id IN (1369,1430) THEN 'critical factors'
+				 WHEN ev.skill_id IN (1412,1429,1408) THEN 'position specifics'
+                 ELSE sk.[type]
+            END AS skill_type
+           ,CASE WHEN ev.skill_id IN (1370,1389,1439) THEN 'Competitiveness'
+                 WHEN ev.skill_id IN (1414,1418) THEN 'Pass Rush Ability'
+                 WHEN ev.skill_id IN (1448,1363) THEN 'Blocking'
+                 WHEN ev.skill_id IN (1364,1449,1496) THEN 'Hands'
+                 WHEN ev.skill_id IN (1426,1446) THEN 'Pressure Kicks / Mental Stability'
+                 WHEN ev.skill_id IN (1401,1397) THEN 'Release'
+                 WHEN ev.skill_id IN (1420,1400) THEN 'Sustain / Run Blocking'
+                 WHEN ev.skill_id IN (1416,1411) THEN 'Shed Blockers / Use of Hands'
+				 WHEN ev.skill_id IN (1371,1386) THEN 'Character'
+				 WHEN ev.skill_id IN (1374,1387) THEN 'Durability'
+				 WHEN ev.skill_id IN (1393,1451) THEN 'Production'
+				 WHEN ev.skill_id IN (1369,1430) THEN 'Size'
+				 WHEN ev.skill_id IN (1412,1429,1408) THEN 'Tackling'
+                 ELSE sk.[name]
+            END AS skill_name
+           ,CAST(gr.value AS FLOAT) AS value            
+	  INTO #temp_component_grades
+      FROM [BaneProductionAnalytics].[dbo].[reports] re
+INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] t 
+		ON t.taggable_id = re.id 
+	   AND UPPER(t.taggable_type) = 'REPORT'
+	   AND t.tag_id = 11 --(it is a college report)
+INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl 
+        ON re.player_id = pl.id
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[evaluations] ev
+	    ON re.id=ev.report_id
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[skills] sk
+        ON ev.skill_id=sk.id
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+		ON ev.grade_id=gr.id
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[users] us
+		ON re.author_id=us.id    
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[positions] po
+		ON re.position_id = po.id     
+     WHERE 1=1
+       AND re.is_deleted = 0
+	   AND UPPER(us.[type]) NOT LIKE '%COACH%'  
+	   AND UPPER(re.[type]) <> 'SPECIAL TEAMS' 
+	   AND translation NOT IN ('ST','PK','PT','LS')
+       AND gr.scale_id = 5 --(it is a 3-7 component grade)
+	   AND re.[type] IN ('fall','all star game','cross-check','post cc')
+	   AND draft_year >= 2005
+	   AND draft_year <= @current_season + 1
+  ORDER BY re.id
+          ,ev.id
+          ,sk.id
+          ,gr.id
+
+/*
+SELECT *
+FROM #temp_component_grades
+WHERE report_id = 511036
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Pivot the grades by report. So that you have all the grades from a report in the same row
+
+OUTPUT TABLES:
+#temp_component_grades_pivot
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_component_grades_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_component_grades_pivot') IS NOT NULL
+	DROP TABLE #temp_component_grades_pivot
+
+    SELECT report_id
+          ,scout_id
+          ,bane_player_id
+		  ,draft_year
+		  ,position
+-----------STICD
+		  ,[S] AS sticd_speed
+		  ,[T] AS sticd_toughness
+		  ,[I] AS sticd_instincts
+		  ,[C] AS sticd_character
+		  ,[D] AS sticd_durability
+-----------Critical Factors
+		  ,[CF-AA] AS cf_athletic_ability
+		  ,[CF-CMP] AS cf_competitiveness
+		  ,[CF-STR/EXPL] AS cf_strength_explosion
+		  ,[CF-PLYSPD] AS cf_playing_speed
+		  ,[CF-SIZ] AS cf_size
+-----------Critical Factors (QB Only)
+		  ,[CF-ARM/S] AS cf_arm_strength
+		  ,[CF-ACC] AS cf_accuracy
+		  ,[CF-MOB] AS cf_mobility
+		  ,[CF-AWA] AS cf_mental_awareness
+		  ,[CF-PRO] AS cf_production
+-----------Position Specifics (ALL)
+	      ,[PS-ST] AS ps_special_teams
+-----------Position Specifics (QB)
+		  ,[PS-SPD/HWS] AS ps_speed_hws_chart
+		  ,[PS-SIZ/S] AS ps_size_strength
+		  ,[PS-DRP/S] AS ps_drops_setup
+		  ,[PS-REL] AS ps_release --OSKILL too
+		  ,[PS-PKT/A] AS ps_pocket_awareness
+		  ,[PS-DEC/M] AS ps_decision_making
+		  ,[PS-PROD] AS ps_production
+-----------Position Specifics (OSKILL)
+		  ,[PS-VIS] AS ps_vision_instincts
+		  ,[PS-ELU] AS ps_elusiveness
+		  ,[PS-INSRUN] AS ps_inside_run
+		  ,[PS-OUTRUN] AS ps_outside_run
+		  ,[PS-BALLPROT] AS ps_ball_protection
+		  ,[PS-HNDS] AS ps_hands
+		  ,[PS-PLY/M] AS ps_play_making
+		  ,[PS-BLOCK] AS ps_blocking
+		  ,[PS-ROU] AS ps_routes
+		  ,[PS-RAC] AS ps_run_after_catch
+		  ,[PS-BODY/A] AS ps_body_adjustment
+-----------Position Specifics (OL)
+		  ,[PS-SUS/RUNB] AS ps_sustain_run_blocking
+		  ,[PS-PASS/BLK] AS ps_pass_blocking
+		  ,[PS-HND/QK] AS ps_hand_quickness
+		  ,[PS-PULL] AS ps_pulling
+		  ,[PS-BLTZ/PICK] AS ps_blitz_pickup_fbi
+-----------Position Specifics (DEFENSE)
+		  ,[PS-KEY/D] AS ps_key_and_diagnose
+		  ,[PS-TKL] AS ps_tackling
+		  ,[PS-LAT/M] AS ps_lateral_movement
+		  ,[PS-POA/R] AS ps_poa_run
+		  ,[PS-PASS/R] AS ps_pass_rush_ability
+		  ,[PS-SHD/B/HNDS] AS ps_shed_blockers_use_of_hands
+		  ,[PS-PASS/RNG] AS ps_pass_ability_range
+		  ,[PS-PUR] AS ps_pursuit
+-----------Position Specifics (DB)
+		  ,[PS-MM/C] AS ps_m_m_cover
+		  ,[PS-ZNE/C] AS ps_zone_cover		  
+		  ,[PS-CLS/B] AS ps_close_on_the_ball
+		  ,[PS-RNG/B] AS ps_range_ball_awareness
+-----------Position Specifics (OTHERS)
+		  ,[PS-ACC] AS ps_accurracy
+		  ,[PS-APPR/LN] AS ps_approach_line
+		  ,[PS-COV] AS ps_coverage
+		  ,[PS-DIR/K] AS ps_directional_kicker
+		  ,[PS-FOOT/S] AS ps_foot_speed
+		  ,[PS-HANDL/T] AS ps_handling_time  
+		  ,[PS-PLANT/R] AS ps_plant_relationship
+		  ,[PS-PRESS/K/MENT] AS ps_pressure_kicks_mental_stability
+		  ,[PS-PROD/A] AS ps_production_accuracy
+		  ,[PS-RISE] AS ps_rise
+		  ,[PS-SIZ] AS ps_size
+		  ,[PS-STAWY/KICKER] AS ps_straightaway_kicker
+		  ,[PS-STEP/P] AS ps_stepping_pattern
+		  ,[PS-STYLE] AS ps_style
+		  ,[PS-TUFF/TKL] AS ps_toughness_tackling
+		  ,[PS-VEL] AS ps_velocity
+	  INTO #temp_component_grades_pivot
+      FROM (
+    SELECT report_id
+          ,scout_id
+          ,bane_player_id
+		  ,draft_year
+		  ,position
+		  ,skill_code
+		  ,value
+      FROM #temp_component_grades WHERE skill_code IN ('CF-AA', 'CF-ACC', 'CF-ANG/APP', 'CF-ARM/S', 'CF-AWA', 'CF-CMP', 'CF-FLI/BALL', 'CF-MOB', 'CF-MTL/GAM', 'CF-PLYSPD', 'CF-PRO', 'CF-SIZ', 'CF-STR/EXPL', 'PS-ACC', 'PS-APPR/LN', 'PS-BALLPROT', 'PS-BLOCK', 'PS-BLTZ/PICK', 'PS-BODY/A', 'PS-CLS/B', 'PS-COV', 'PS-DEC/M', 'PS-DIR/K', 'PS-DRP/S', 'PS-ELU', 'PS-FOOT/S', 'PS-HANDL/T', 'PS-HND/QK', 'PS-HNDS', 'PS-INSRUN', 'PS-KEY/D', 'PS-LAT/M', 'PS-MM/C', 'PS-OUTRUN', 'PS-PASS/BLK', 'PS-PASS/R', 'PS-PASS/RNG', 'PS-PKT/A', 'PS-PLANT/R', 'PS-PLY/M', 'PS-POA/R', 'PS-PRESS/K/MENT', 'PS-PROD', 'PS-PROD/A', 'PS-PULL', 'PS-PUR', 'PS-RAC', 'PS-REL', 'PS-RISE', 'PS-RNG/B', 'PS-ROU', 'PS-SHD/B/HNDS', 'PS-SIZ', 'PS-SIZ/S', 'PS-SPD/HWS', 'PS-ST', 'PS-STAWY/KICKER', 'PS-STEP/P', 'PS-STYLE', 'PS-SUS/RUNB', 'PS-TKL', 'PS-TUFF/TKL', 'PS-VEL', 'PS-VIS', 'PS-ZNE/C', 'C', 'D', 'I', 'S', 'T')) up
+     PIVOT (MAX(value) FOR skill_code IN ([CF-AA], [CF-ACC], [CF-ANG/APP], [CF-ARM/S], [CF-AWA], [CF-CMP], [CF-FLI/BALL], [CF-MOB], [CF-MTL/GAM], [CF-PLYSPD], [CF-PRO], [CF-SIZ], [CF-STR/EXPL], [PS-ACC], [PS-APPR/LN], [PS-BALLPROT], [PS-BLOCK], [PS-BLTZ/PICK], [PS-BODY/A], [PS-CLS/B], [PS-COV], [PS-DEC/M], [PS-DIR/K], [PS-DRP/S], [PS-ELU], [PS-FOOT/S], [PS-HANDL/T], [PS-HND/QK], [PS-HNDS], [PS-INSRUN], [PS-KEY/D], [PS-LAT/M], [PS-MM/C], [PS-OUTRUN], [PS-PASS/BLK], [PS-PASS/R], [PS-PASS/RNG], [PS-PKT/A], [PS-PLANT/R], [PS-PLY/M], [PS-POA/R], [PS-PRESS/K/MENT], [PS-PROD], [PS-PROD/A], [PS-PULL], [PS-PUR], [PS-RAC], [PS-REL], [PS-RISE], [PS-RNG/B], [PS-ROU], [PS-SHD/B/HNDS], [PS-SIZ], [PS-SIZ/S], [PS-SPD/HWS], [PS-ST], [PS-STAWY/KICKER], [PS-STEP/P], [PS-STYLE], [PS-SUS/RUNB], [PS-TKL], [PS-TUFF/TKL], [PS-VEL], [PS-VIS], [PS-ZNE/C], [C], [D], [I], [S], [T])) AS pvt
+  ORDER BY report_id
+          ,scout_id
+          ,bane_player_id
+		  ,draft_year
+		  ,position
+
+/*
+SELECT *
+FROM #temp_component_grades_pivot 
+*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with all the overall report grades to join to the pivoted component grades.
+
+OUTPUT TABLES:
+#temp_overall_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_overall_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_overall_grades') IS NOT NULL
+	DROP TABLE #temp_overall_grades
+
+    SELECT re.id AS report_id
+          ,CASE WHEN CAST(gr.value AS NUMERIC (3,1)) IN (8.0) THEN 100
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (7.0) THEN 92
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (6.9) THEN 82
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (6.7,6.5) THEN 71
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (6.4,6.3,6.2) THEN 64
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (6.1,6.0) THEN 58
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.9) THEN 53.5
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.8) THEN 50
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.7) THEN 47
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.6) THEN 45.5
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.4) THEN 43
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.2) THEN 41
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.0) THEN 40
+                ELSE NULL
+           END AS overall_value
+		  ,CAST(gr.value AS NUMERIC (3,1)) AS overall_bucket        
+	  INTO #temp_overall_grades
+      FROM [BaneProductionAnalytics].[dbo].[reports] re
+INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] t 
+		ON t.taggable_id = re.id 
+	   AND UPPER(t.taggable_type) = 'REPORT'
+	   AND t.tag_id = 11 --(it is a college report)
+INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl 
+        ON re.player_id = pl.id
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+		ON re.grade_id=gr.id
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[users] us
+		ON re.author_id=us.id    
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[positions] po
+		ON re.position_id = po.id              
+     WHERE 1=1
+       AND re.is_deleted = 0
+	   AND UPPER(us.[type]) NOT LIKE '%COACH%'  
+	   AND UPPER(re.[type]) <> 'SPECIAL TEAMS' 
+	   AND translation NOT IN ('ST','PK','PT','LS')
+       AND gr.scale_id IN (4,6) --(it is an overall grade)
+	   AND re.[type] IN ('fall','all star game','cross-check','post cc')
+	   AND draft_year >= 2005
+	   AND draft_year <= @current_season + 1
+  ORDER BY re.id
+          ,gr.id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the overall report grades to the pivoted component grades.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+    SELECT cg.*
+		  ,overall_value
+		  ,overall_bucket
+		  ,CONCAT(us.last_name,', ',us.first_name) AS scout
+		  ,CONCAT(pl.last_name,', ',pl.first_name) AS player
+	  FROM #temp_component_grades_pivot cg
+ LEFT JOIN #temp_overall_grades ov
+		ON cg.report_id = ov.report_id
+INNER JOIN BaneProductionAnalytics.dbo.users us
+		ON cg.scout_id = us.id
+INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON cg.bane_player_id = pl.id
