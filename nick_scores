@@ -1,0 +1,365 @@
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find if a player has clean measurables
+
+OUTPUT TABLES:
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+-- Check if #temp_cleans exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cleans') IS NOT NULL
+	DROP TABLE #temp_cleans
+
+	SELECT pl.id AS bane_player_id
+		,mt.abbreviation
+		,mt.code
+		,mm.[value] AS meas_val
+		,st.[value] AS clean_val
+		,CASE WHEN mt.preferred_type = 'max' THEN CASE WHEN mm.[value] >= st.[value] THEN 1 ELSE 0 END
+			WHEN mt.preferred_type = 'min' THEN CASE WHEN mm.[value] <= st.[value] THEN 1 ELSE 0 END
+			ELSE 0 
+		END AS clean
+	INTO #temp_cleans
+	FROM BaneProductionAnalytics.dbo.players pl
+	INNER JOIN BaneProductionAnalytics.dbo.workouts wo
+		ON pl.id = wo.player_id
+		AND wo.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.measurables mm
+		ON mm.workout_id = wo.id
+	INNER JOIN BaneProductionAnalytics.dbo.measurable_types mt
+		ON mm.measurable_type_id = mt.id
+	INNER JOIN BaneProductionAnalytics.dbo.standards st
+		ON mt.id = st.measurable_type_id
+		AND pl.position_id = st.position_id
+	INNER JOIN BaneProductionAnalytics.dbo.reliabilities re
+		ON mm.reliability_id = re.id
+		AND re.is_active = 1
+	WHERE re.code IN ('I','Z','W','T')
+		AND pl.is_deleted = 0
+		AND pl.draft_year >= 2016
+		AND mt.code IN ('Hgt','Wgt','WSpanCnv','ArmLngCnv','BroadJumpCnv','20YShuttle','StrengthReps225','10YTime','20YTime','40YTime','3Cone','HSpanCnv','VertJumpCnv')
+
+
+-- Check if #temp_cleans_to_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cleans_to_pivot') IS NOT NULL
+	DROP TABLE #temp_cleans_to_pivot
+
+	SELECT bane_player_id
+		,code AS measurable
+		,CASE WHEN SUM(clean) >= 1 THEN 1 ELSE 0 END AS is_clean
+	INTO #temp_cleans_to_pivot
+	FROM #temp_cleans
+	GROUP BY bane_player_id
+		,code
+
+
+-- Check if #temp_cleans_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cleans_pivot') IS NOT NULL
+	DROP TABLE #temp_cleans_pivot
+
+	SELECT bane_player_id
+		,ISNULL([Hgt],0) AS height
+		,ISNULL([Wgt],0) AS [weight]
+		,ISNULL([HSpanCnv],0) AS hand_size
+		,ISNULL([ArmLngCnv],0) AS arm_length
+		,ISNULL([WSpanCnv],0) AS wingspan
+		,ISNULL([BroadJumpCnv],0) AS broad_jump
+		,ISNULL([VertJumpCnv],0) AS vertical_jump
+		,ISNULL([StrengthReps225],0) AS bench_reps
+		,ISNULL([20YShuttle],0) AS short_shuttle
+		,ISNULL([10YTime],0) AS dash_10
+		,ISNULL([20YTime],0) AS dash_20
+		,ISNULL([40YTime],0) AS dash_40
+		,ISNULL([3Cone],0) AS three_cone
+	INTO #temp_cleans_pivot
+	FROM (
+	SELECT bane_player_id
+		,measurable
+		,is_clean
+	FROM #temp_cleans_to_pivot) up
+	PIVOT (MAX(is_clean) FOR measurable IN ([Hgt],[Wgt],[WSpanCnv],[ArmLngCnv],[BroadJumpCnv],[20YShuttle],[StrengthReps225],[10YTime],[20YTime],[40YTime],[3Cone],[HSpanCnv],[VertJumpCnv])) AS pvt
+	WHERE 1 = 1
+
+
+	
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the character and durability grades for each player. This happens in two steps.
+
+OUTPUT TABLES:
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_evaluations exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_evaluations') IS NOT NULL
+	DROP TABLE #temp_evaluations
+
+	SELECT ev.id
+		,CASE WHEN skill_id IN (1436,1524,1391) THEN 1436
+			WHEN skill_id IN (1455,1427) THEN 1455
+			WHEN skill_id IN (1525,1390) THEN 1525
+			WHEN skill_id IN (1370,1439,1389) THEN 1370
+			WHEN skill_id IN (1397,1401) THEN 1397
+			WHEN skill_id IN (1402,1526) THEN 1402
+			WHEN skill_id IN (1523,1396,1398) THEN 1523
+			WHEN skill_id IN (1530,1422) THEN 1530
+			WHEN skill_id IN (1361,1359) THEN 1361
+			WHEN skill_id IN (1412,1408) THEN 1412 --,1429 ST tackling
+			WHEN skill_id IN (1426,1441,1446) THEN 1426
+			WHEN skill_id IN (1421,1363) THEN 1421
+			WHEN skill_id IN (1420,1400,1448) THEN 1420
+			WHEN skill_id IN (1532,1405) THEN 1532
+			WHEN skill_id IN (1414,1418) THEN 1414
+			WHEN skill_id IN (1368,1394) THEN 1368
+			WHEN skill_id IN (1369,1430,1395) THEN 1369
+			WHEN skill_id IN (1393,1451,1445) THEN 1393
+			WHEN skill_id IN (1450,1528) THEN 1450
+			WHEN skill_id IN (1539,1459,1388) THEN 1539
+			WHEN skill_id IN (1366,1392) THEN 1366
+			WHEN skill_id IN (1536,1417) THEN 1536
+			WHEN skill_id IN (1533,1409) THEN 1533
+			WHEN skill_id IN (1534,1410) THEN 1534
+			WHEN skill_id IN (1535,1416) THEN 1535
+			WHEN skill_id IN (1415,1537,1411) AND po.translation IN ('OB','IB') THEN 1535
+			WHEN skill_id IN (1415) AND po.translation IS NULL THEN NULL
+			WHEN skill_id IN (1415,1538) THEN 1538
+			WHEN skill_id IN (1537,1411) THEN 1537
+			WHEN skill_id IN (1364) AND po.translation IN ('DC','DS','IB') THEN 1534
+			WHEN skill_id IN (1364) AND po.translation IS NULL THEN NULL
+			WHEN skill_id IN (1364,1449,1529,1527,1496,1404) THEN 1449
+			ELSE skill_id
+		END AS skill_id
+		,ev.grade_id
+		,ev.report_id
+		,ev.explanation
+		,ev.created_at
+		,ev.updated_at
+		,ev.interview_id
+	INTO #temp_evaluations
+	FROM [BaneProductionAnalytics].[dbo].[evaluations] ev
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[reports] re
+		ON ev.report_id = re.id
+		AND re.is_deleted = 0
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[positions] po
+		ON re.position_id = po.id
+	WHERE ev.is_deleted = 0
+
+DECLARE @cSeason INT
+SELECT @cSeason = (SELECT MAX(season) FROM Analytics.dbo.map_nfl_league_year_dates WHERE GETDATE() >= regular_season_start)
+
+-- Check if #temp_component_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_component_grades') IS NOT NULL
+	DROP TABLE #temp_component_grades
+
+	SELECT re.id AS report_id
+		,pl.id AS bane_player_id
+		,re.author_id AS scout_id	
+		,sk.id AS skill_id
+		,sk.[code] AS skill_code
+		,sk.[type] AS skill_type
+		,sk.[name] AS skill_name
+		,CAST(gr.value AS FLOAT) AS [value]
+	INTO #temp_component_grades
+	FROM [BaneProductionAnalytics].[dbo].[reports] re
+	INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] t 
+		ON t.taggable_id = re.id 
+		AND UPPER(t.taggable_type) = 'REPORT'
+		AND t.tag_id = 11 --(it is a college report)
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl 
+		ON re.player_id = pl.id
+	LEFT JOIN #temp_evaluations ev
+		ON re.id=ev.report_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[skills] sk
+		ON ev.skill_id=sk.id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+		ON ev.grade_id=gr.id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[users] us
+		ON re.author_id=us.id    
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[positions] po
+		ON re.position_id = po.id               
+	WHERE 1=1
+		AND re.is_deleted = 0
+		AND UPPER(re.[type]) <> 'SPECIAL TEAMS' 
+		AND translation NOT IN ('ST','PK','PT','LS')
+		AND gr.scale_id = 5 --(it is a 3-7 component grade)
+		AND re.[type] IN ('fall','cross-check','post cc','coach','all star game')
+		AND draft_year >= 2005
+		AND draft_year <= @cSeason + 2
+		AND (ev.skill_id IN (1386,1478,1479) OR sk.[type] in ('sticd','critical factors')) 
+	ORDER BY re.id
+		,ev.id
+		,sk.id
+		,gr.id
+
+
+-- Check if #temp_component_grades_pivot exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_component_grades_pivot') IS NOT NULL
+	DROP TABLE #temp_component_grades_pivot
+
+    SELECT bane_player_id
+		,[S] AS sticd_speed
+		,[T] AS sticd_toughness
+		,[I] AS sticd_instincts
+		,[D] AS sticd_durability
+		,[C] AS character_overall
+		,[I-OFFCHAR] AS character_off
+		,[I-ONCHAR] AS character_on
+		,[CF-AA] AS cf_athletic_ability
+		,[CF-CMP] AS cf_competitiveness
+		,[CF-PLYSPD] AS cf_playing_speed
+		,[CF-PRO] AS cf_production
+		,[CF-SIZ] AS cf_size
+		,[CF-ST] AS cf_special_teams
+		,[CF-STR/EXPL] AS cf_strength_explosion
+	INTO #temp_component_grades_pivot
+	FROM (
+		SELECT bane_player_id
+			,skill_code
+			,[value]
+	FROM #temp_component_grades WHERE skill_code IN ('CF-AA','CF-CMP','CF-PLYSPD','CF-PRO','CF-SIZ','CF-ST','CF-STR/EXPL','I-OFFCHAR','I-ONCHAR','C','D','I','S','T')) up
+    PIVOT (AVG([value]) FOR skill_code IN ([CF-AA],[CF-CMP],[CF-PLYSPD],[CF-PRO],[CF-SIZ],[CF-ST],[CF-STR/EXPL],[I-OFFCHAR],[I-ONCHAR],[C],[D],[I],[S],[T])) AS pvt
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the GRIT score.
+
+OUTPUT TABLES:
+#temp_interviews
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_interviews exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_interviews') IS NOT NULL
+	DROP TABLE #temp_interviews
+			
+	SELECT player_id		
+		,CASE WHEN COUNT(player_id) = 8 THEN SUM(CAST(g.value AS FLOAT)) / 2
+			ELSE SUM(CAST(g.value AS FLOAT))
+		END AS score	
+		,COUNT(player_id) AS number_of_scores
+	INTO #temp_interviews		
+	FROM BaneProductionAnalytics.dbo.interviews i		
+	INNER JOIN BaneProductionAnalytics.dbo.evaluations e		
+		ON i.id = e.interview_id	
+	INNER JOIN BaneProductionAnalytics.dbo.grades g		
+		ON e.grade_id = g.id	
+	INNER JOIN BaneProductionAnalytics.dbo.skills s		
+		ON e.skill_id = s.id	
+	WHERE i.created_at >= '05/01/2019'
+	GROUP BY player_id	
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the table with a player's max college grade. This is the grade to use if a player doesn't have a pro grade.
+
+OUTPUT TABLES:
+#temp_max_college_grade
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_max_college_grade exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_max_college_grade') IS NOT NULL
+	DROP TABLE #temp_max_college_grade
+
+	SELECT re.player_id AS bane_player_id	
+		,MAX(CAST(gr.[value] AS NUMERIC(3,1))) AS college_grade
+	INTO #temp_max_college_grade
+	FROM [BaneProductionAnalytics].dbo.reports re
+	LEFT JOIN [BaneProductionAnalytics].dbo.grades gr
+		ON re.grade_id = gr.id
+	WHERE re.[type] IN ('fall','cross-check','post cc')
+		AND re.is_deleted = 0
+	GROUP BY re.player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join everything
+
+OUTPUT TABLES:
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+			
+	SELECT DISTINCT --p.id
+		 concat(last_name,', ',goes_by) as player		
+		,ISNULL(d.position,z.translation) AS pos	
+		,s.code as school	
+		--,d.legacy_grade AS board_grade
+		,cg.college_grade AS max_grade
+		,UPPER([personality_composite_score]) AS pat_personality	
+		,UPPER([intelligence_composite_score]) as pat_intelligence	
+		,CASE WHEN i.number_of_scores < 4 THEN ROUND(CAST(i.score AS FLOAT) / i.number_of_scores,0)
+			WHEN i.score - 12 IN (0,1,2) THEN 3	
+			WHEN i.score - 12 IN (3,4,5,6) THEN 4
+			WHEN i.score - 12 IN (7,8,9) THEN 5
+			WHEN i.score - 12 IN (10,11,12,13) THEN 6
+			WHEN i.score - 12 IN (14,15,16) THEN 7
+			ELSE NULL
+		END AS interview_score	
+		,character_off
+		,character_on
+		,character_overall
+		,height
+		,[weight]
+		,hand_size
+		,arm_length
+		,wingspan
+		,broad_jump
+		,vertical_jump
+		,bench_reps
+		,short_shuttle
+		,dash_10
+		,dash_20
+		,dash_40
+		,three_cone
+		,sticd_speed
+		,sticd_toughness
+		,sticd_instincts
+		,sticd_durability
+		,cf_athletic_ability
+		,cf_competitiveness
+		,cf_playing_speed
+		,cf_production
+		,cf_size
+		,cf_special_teams
+		,cf_strength_explosion
+	FROM [BaneProductionAnalytics].[dbo].[players] p  		
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[pat_composite_scores] c		
+		ON p.id = c.player_id	
+	LEFT JOIN #temp_interviews i		
+		ON p.id = i.player_id	
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[draft_board_grades] d		
+		ON p.id = d.player_id	
+		AND d.draft_board_id = 73
+	LEFT JOIN [BaneProductionAnalytics].[dbo].schools s		
+		ON p.ncaa_club_id = s.id	
+	LEFT JOIN [BaneProductionAnalytics].[dbo].positions z		
+		ON p.position_id = z.id	
+	LEFT JOIN #temp_component_grades_pivot ch
+		ON p.id = ch.bane_player_id
+	LEFT JOIN #temp_max_college_grade cg
+		ON p.id = cg.bane_player_id
+	LEFT JOIN #temp_cleans_pivot cl
+		ON p.id = cl.bane_player_id
+	WHERE p.is_deleted = 0		
+		AND p.draft_year = 2020
+		AND (ch.bane_player_id IS NOT NULL	
+		OR c.player_id IS NOT NULL	
+		OR i.player_id IS NOT NULL)	
+		AND d.player_id	IS NOT NULL
+	ORDER BY cg.college_grade DESC
+
+
+
+
