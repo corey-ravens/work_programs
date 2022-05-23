@@ -1,0 +1,277 @@
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get down to one row of draft board position. Take a players draft
+board position from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_board_positions_with_order
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_positions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions
+
+	SELECT player_id AS bane_player_id
+		,CASE WHEN position_translation IN ('RUSH','SAM') THEN 'OB'
+			WHEN position_translation IN ('FS','SS') THEN 'DS'
+			ELSE position_translation
+		END AS position
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-DEC' THEN 4
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DEC' THEN 5
+			ELSE NULL
+	END AS order_by
+	INTO #temp_draft_board_positions
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE position != ''
+		AND position IS NOT NULL
+		AND player_id <> 64668
+		AND position_translation NOT IN ('RS','ST')
+
+
+-- Check if #temp_draft_board_positions_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_with_order
+
+	SELECT bane_player_id
+		,position
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by) AS draft_board_position_order
+	INTO #temp_draft_board_positions_with_order
+	FROM #temp_draft_board_positions
+
+/*
+SELECT *
+FROM #temp_draft_board_positions_with_order
+*/
+
+-- Check if #temp_draft_board_positions_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_latest
+
+	SELECT *
+	INTO #temp_draft_board_positions_latest
+	FROM #temp_draft_board_positions_with_order
+	WHERE draft_board_position_order = 1
+
+/*
+SELECT DISTINCT position
+FROM #temp_draft_board_positions_latest
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get down to one row of draft board grade. Take a players draft
+board grade from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_board_grades_latest
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades
+
+	SELECT player_id AS bane_player_id
+		,legacy_grade
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-DEC' THEN 4
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DEC' THEN 5
+			ELSE NULL
+	END AS order_by
+	INTO #temp_draft_board_grades
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE position != ''
+		AND position IS NOT NULL
+		AND player_id <> 64668
+		AND position_translation NOT IN ('RS','ST')
+
+
+-- Check if #temp_draft_board_grades_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_with_order
+
+	SELECT bane_player_id
+		,legacy_grade
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by) AS draft_board_grade_order
+	INTO #temp_draft_board_grades_with_order
+	FROM #temp_draft_board_grades
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_with_order
+*/
+
+-- Check if #temp_draft_board_grades_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_latest
+
+	SELECT *
+	INTO #temp_draft_board_grades_latest
+	FROM #temp_draft_board_grades_with_order
+	WHERE draft_board_grade_order = 1
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_latest
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the medical grade table for possible rejects.
+
+OUTPUT TABLES:
+#temp_board_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_medicals exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_medicals') IS NOT NULL
+	DROP TABLE #temp_medicals
+
+	SELECT mr.player_id AS bane_player_id
+		,CASE WHEN pl.draft_year < 2017 THEN legacy_grade ELSE ISNULL(pr.[value],gr.[value]) END AS medical_grade
+		,RANK() OVER (PARTITION BY mr.player_id ORDER BY mr.created_at DESC, mr.id DESC) AS report_order
+	INTO #temp_medicals
+	FROM BaneProductionAnalytics.dbo.medical_reports mr
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON mr.player_id = pl.id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.grades gr
+		ON mr.grade_id = gr.id
+	LEFT JOIN BaneProductionAnalytics.dbo.grades pr
+		ON mr.projection_grade_id = pr.id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the durability grades table.
+
+OUTPUT TABLES:
+#temp_durability_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_durability_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_durability_grades') IS NOT NULL
+	DROP TABLE #temp_durability_grades
+
+	SELECT pl.id AS bane_player_id	
+		,MAX(CAST(gr.value AS FLOAT)) AS durability_max
+		,AVG(CAST(gr.value AS FLOAT)) AS durability_mean
+		,MIN(CAST(gr.value AS FLOAT)) AS durability_min
+	INTO #temp_durability_grades
+	FROM [BaneProductionAnalytics].[dbo].[reports] re
+	INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] t 
+		ON t.taggable_id = re.id 
+		AND UPPER(t.taggable_type) = 'REPORT'
+		AND t.tag_id = 11 --(it is a college report)
+	INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl 
+		ON re.player_id = pl.id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[evaluations] ev
+		ON re.id=ev.report_id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[skills] sk
+		ON ev.skill_id=sk.id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+		ON ev.grade_id=gr.id
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[users] us
+		ON re.author_id=us.id    
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[positions] po
+		ON re.position_id = po.id
+     WHERE 1=1
+       AND re.is_deleted = 0
+	   AND UPPER(us.[type]) NOT LIKE '%COACH%'  
+	   AND UPPER(re.[type]) <> 'SPECIAL TEAMS' 
+	   AND translation NOT IN ('ST','PK','PT','LS')
+       AND gr.scale_id = 5 --(it is a 3-7 component grade)
+	   AND re.[type] IN ('fall','all star game','cross-check','post cc')
+	   --AND MONTH(re.created_at) IN (6,7,8,9,10,11,12,1,2,3,4)
+	   AND sk.[name] = 'Durability'
+	GROUP BY pl.id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Add up games started, played, injured in first 4 seasons.
+
+OUTPUT TABLES:
+#temp_playtime
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_playtime exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_playtime') IS NOT NULL
+	DROP TABLE #temp_playtime
+
+	SELECT hi.player_id AS bane_player_id
+		,SUM(games_started) AS starts
+		,SUM(games_played) AS played
+		,SUM(games_injured) / NULLIF(CAST(Count(*) AS FLOAT),0) AS injured
+	INTO #temp_playtime
+	FROM BaneProductionAnalytics.dbo.pro_season_play_histories hi
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON hi.player_id = pl.id
+		AND pl.is_deleted = 0
+		AND hi.season <= pl.draft_year + 3
+	WHERE hi.season_type = 'Reg'
+	GROUP BY hi.player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the sequence list table.
+
+OUTPUT TABLES:
+#temp_sequence
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_sequence exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_sequence') IS NOT NULL
+	DROP TABLE #temp_sequence
+
+	SELECT pl.id AS bane_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,sc.code AS college
+		,pl.draft_year
+		,draft_round
+		,draft_number
+		,bp.position
+		,bg.legacy_grade AS board_grade
+		,medical_grade
+		,durability_max
+		,durability_mean
+		,durability_min
+		,starts
+		,played
+		,injured
+	FROM BaneProductionAnalytics.dbo.players pl
+	LEFT JOIN #temp_medicals mr
+		ON pl.id = mr.bane_player_id
+		AND mr.report_order = 1
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON pl.ncaa_club_id = sc.id
+	LEFT JOIN AnalyticsScouting.dbo.draft_board_grades db
+		ON pl.id = db.Bane_Production_ID
+	LEFT JOIN #temp_draft_board_positions_latest bp
+		ON pl.id = bp.bane_player_id
+	LEFT JOIN #temp_draft_board_grades_latest bg
+		ON pl.id = bg.bane_player_id
+	LEFT JOIN #temp_durability_grades du
+		ON pl.id = du.bane_player_id
+	LEFT JOIN #temp_playtime pt
+		ON pl.id = pt.bane_player_id
+	WHERE mr.bane_player_id IS NOT NULL
+		AND pl.draft_year >= 2012
+		AND pl.is_deleted = 0
