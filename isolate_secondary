@@ -1,0 +1,324 @@
+
+
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a list of PFF Player IDs.
+
+OUTPUT TABLES:
+#temp_pff_players
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_pff_players exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pff_players') IS NOT NULL
+	DROP TABLE #temp_pff_players
+
+	SELECT DISTINCT gsis_player_id AS nfl_player_id
+		,player_id AS pff_player_id
+		--,player_name AS player_name_pff
+	INTO #temp_pff_players
+	FROM PFFUltimate.dbo.offense
+
+	INSERT INTO #temp_pff_players
+	SELECT DISTINCT gsis_player_id AS nfl_player_id
+		,player_id AS pff_player_id
+		--,player_name AS player_name_pff
+	FROM PFFUltimate.dbo.defense
+	WHERE gsis_player_id NOT IN (SELECT DISTINCT nfl_player_id FROM #temp_pff_players)
+
+	INSERT INTO #temp_pff_players
+	SELECT DISTINCT gsis_player_id AS nfl_player_id
+		,player_id AS pff_player_id
+		--,player_name AS player_name_pff
+	FROM PFFUltimate.dbo.special
+	WHERE gsis_player_id NOT IN (SELECT DISTINCT nfl_player_id FROM #temp_pff_players)
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with rookie PFF average grades by position and draft roudn so you can fill in the first few games.
+
+Use the undrafted average for non rookies playing in their first few games.
+
+OUTPUT TABLES:
+#temp_rookie_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_rookie_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_rookie_grades') IS NOT NULL
+	DROP TABLE #temp_rookie_grades
+
+	SELECT position
+		,draft_round
+		,AVG(CASE WHEN unit = 'defense' THEN [defense] WHEN unit = 'offense' THEN [offense] ELSE NULL END) AS grade_average
+	INTO #temp_rookie_grades
+	FROM [PFFUltimate].[dbo].[season_grade] sg
+	INNER JOIN #temp_pff_players tp
+		ON sg.player_id = pff_player_id
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON tp.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE [week] = (SELECT MAX([week]) FROM [PFFUltimate].[dbo].[season_grade] sg2 WHERE sg.player_id = sg2.player_id AND sg.season = sg2.season)
+		AND sg.season = pl.draft_year
+	GROUP BY position
+		,draft_round
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get the rolling average grade by game.
+
+OUTPUT TABLES:
+##temp_rolling_game_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_rolling_game_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_rolling_game_grades') IS NOT NULL
+	DROP TABLE #temp_rolling_game_grades
+
+	SELECT pf.nfl_game_key
+		,pf.pff_game_id
+		,LEAD(pff_game_id,1) over (PARTITION BY gg.player_id ORDER BY gg.season, gg.[week]) AS pff_game_id_next
+		,gg.season
+		,pf.season_type
+		,gg.[week]
+		,nfl_id AS nfl_player_id
+		,[player]
+		,ud.draft_round
+		,gg.[position]
+		,gg.[team]
+		,[team_id]
+		,offense
+		,defense
+		,CASE WHEN gg.season = pl.draft_year AND COUNT(CASE WHEN po.team = 'offense' THEN [offense] ELSE [defense] END) OVER (PARTITION BY nfl_id ORDER BY gg.season, gg.[week] ASC ROWS 7 PRECEDING) < 6 THEN ro.grade_average
+			WHEN COUNT(CASE WHEN po.team = 'offense' THEN [offense] ELSE [defense] END) OVER (PARTITION BY nfl_id ORDER BY gg.season, gg.[week] ASC ROWS 7 PRECEDING) < 6 THEN ud.grade_average	
+			WHEN COUNT(CASE WHEN po.team = 'offense' THEN [offense] ELSE [defense] END) OVER (PARTITION BY nfl_id ORDER BY gg.season, gg.[week] ASC ROWS 7 PRECEDING) >= 6 THEN AVG(CASE WHEN po.team = 'offense' THEN [offense] ELSE [defense] END) OVER (PARTITION BY nfl_id ORDER BY gg.season, gg.[week] ASC ROWS 7 PRECEDING) 
+			ELSE NULL 
+		END AS rolling_average_grade
+	INTO #temp_rolling_game_grades
+	FROM [PFFUltimate].[dbo].[game_grade] gg
+	INNER JOIN Analytics.dbo.stage_games_pff pf
+		ON gg.game_id = pf.pff_game_id
+	INNER JOIN #temp_pff_players tp
+		ON gg.player_id = pff_player_id
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON tp.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN #temp_rookie_grades ro
+		ON gg.position = ro.position
+		AND ISNULL(pl.draft_round,99) = ISNULL(ro.draft_round,99)
+	LEFT JOIN #temp_rookie_grades ud
+		ON gg.position = ud.position
+		AND ISNULL(ud.draft_round,99) = 99
+	WHERE gg.unit = po.team
+		AND season_type IN ('REG','POST')
+	ORDER BY nfl_player_id
+		,nfl_game_key
+	
+	CREATE INDEX ix_rolling_game_grades ON #temp_rolling_game_grades (nfl_player_id, pff_game_id_next)
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with the grades of all the players in on a given play.
+
+You want the grade of those players coming into the game.  How good are the availalbe players that are available on each play
+
+You don't need to worry about who is available, just who is in.  It's the grade coming into the game, but on that play. If 
+someone isn't int, doesn't matter why.
+
+OUTPUT TABLES:
+#temp_grades_of_players_used
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_pff_season_pos exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pff_season_pos') IS NOT NULL
+	DROP TABLE #temp_pff_season_pos
+
+select player_id	
+	,season
+	,unit
+	,position
+into #temp_pff_season_pos
+from [PFFUltimate].[dbo].[season_grade] sg
+where [week] = (SELECT MAX([week]) FROM [PFFUltimate].[dbo].[season_grade] sg2 WHERE sg.player_id = sg2.player_id AND sg.season = sg2.season)
+
+
+-- Check if #temp_pff_game_pos exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pff_game_pos') IS NOT NULL
+	DROP TABLE #temp_pff_game_pos
+
+	SELECT DISTINCT player_id
+	,game_id
+		,CASE WHEN game_position in ('DLE','DRE','LE','LOLB','RE','ROLB') THEN 'ED'
+			 WHEN game_position in ('DLT','DRT','NT') THEN 'DI'
+			 WHEN game_position in ('FS','SS') THEN 'S'
+			 WHEN game_position in ('LCB','RCB','SCB') THEN 'CB'
+			 WHEN game_position in ('LILB','LLB','MLB','RILB','RLB','SLB','WLB') THEN 'LB'
+			 ELSE game_position
+		END as game_position
+	INTO #temp_pff_game_pos
+	FROM PffUltimate.dbo.defense
+
+	INSERT INTO #temp_pff_game_pos
+	SELECT DISTINCT player_id
+		,game_id
+		,CASE WHEN game_position in ('LG','RG') THEN 'G'
+			WHEN game_position in ('LT','RT') THEN 'T'
+			WHEN game_position in ('LWR','RWR','SLWR','SRWR') THEN 'WR'
+			WHEN game_position in ('TE-L','TE-R') THEN 'TE'
+			ELSE game_position
+		END as game_position
+	FROM PffUltimate.dbo.offense
+
+
+
+
+-- Check if #temp_grades_of_players_used exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_grades_of_players_used') IS NOT NULL
+	DROP TABLE #temp_grades_of_players_used
+
+	SELECT oo.play_id AS pff_play_id
+		,oo.player_participation_id AS pff_pp_id
+		,oo.player_id AS pff_player_id
+		,gsis_player_id AS nfl_player_id
+		,oo.game_id AS pff_game_id
+		,oo.player_name
+		,gg.player
+		,ISNULL(gg.rolling_average_grade,ud.grade_average) AS rolling_average_grade
+		,oo.grade
+		,oo.position AS position_pff
+		,po.position_blt
+	INTO #temp_grades_of_players_used
+	FROM PffUltimate.dbo.offense oo
+	INNER JOIN PffUltimate.dbo.plays pl
+		ON oo.play_id = pl.play_id
+	LEFT JOIN Analytics.dbo.stage_plays_player_offensive_alignment po
+		ON oo.player_participation_id = po.pff_pp_id
+	LEFT JOIN #temp_rolling_game_grades gg
+		ON oo.gsis_player_id = gg.nfl_player_id
+		AND oo.game_id = gg.pff_game_id_next
+	LEFT JOIN #temp_pff_game_pos ps
+		ON oo.player_id = ps.player_id
+		AND oo.game_id = ps.game_id
+	LEFT JOIN #temp_rookie_grades ud
+		ON ps.game_position = ud.position
+		AND ISNULL(ud.draft_round,99) = 99
+	WHERE pl.season >= 2012
+		AND pl.[week] NOT LIKE 'P%'
+
+
+	INSERT INTO #temp_grades_of_players_used
+	SELECT oo.play_id AS pff_play_id
+		,oo.player_participation_id AS pff_pp_id
+		,oo.player_id AS pff_player_id
+		,gsis_player_id AS nfl_player_id
+		,oo.game_id AS pff_game_id
+		,oo.player_name
+		,gg.player
+		,ISNULL(gg.rolling_average_grade,ud.grade_average) AS rolling_average_grade
+		,oo.grade
+		,oo.position AS position_pff
+		,po.position_blt
+	FROM PffUltimate.dbo.defense oo
+	INNER JOIN PffUltimate.dbo.plays pl
+		ON oo.play_id = pl.play_id
+	LEFT JOIN Analytics.dbo.stage_plays_player_defensive_alignment po
+		ON oo.player_participation_id = po.pff_pp_id
+	LEFT JOIN #temp_rolling_game_grades gg
+		ON oo.gsis_player_id = gg.nfl_player_id
+		AND oo.game_id = gg.pff_game_id_next
+	LEFT JOIN #temp_pff_game_pos ps
+		ON oo.player_id = ps.player_id
+		AND oo.game_id = ps.game_id
+	LEFT JOIN #temp_rookie_grades ud
+		ON ps.game_position = ud.position
+		AND ISNULL(ud.draft_round,99) = 99
+	WHERE pl.season >= 2012
+		AND pl.[week] NOT LIKE 'P%'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	SELECT pl.play_id
+		,season
+		,offense
+		,defense
+		,player_name
+		,uu.position_pff
+		,uu.position_blt
+	FROM PFFUltimate.dbo.plays pl
+	left join #temp_grades_of_players_used uu
+		ON pl.play_id = uu.pff_play_id
+	WHERE pl.season >= 2012
+		AND pl.week not like 'P%'
+		AND pl.run_pass is not null
+		AND pl.special_teams_type IS NULL
+		and rolling_average_grade is null
+
+
+
+	SELECT pl.play_id
+		,pl.game_id
+		,season
+		,offense
+		,defense
+		,count(rolling_average_grade) as players
+	FROM PFFUltimate.dbo.plays pl
+	left join #temp_grades_of_players_used uu
+		ON pl.play_id = uu.pff_play_id
+	WHERE pl.season >= 2012
+		AND pl.week not like 'P%'
+		AND pl.run_pass is not null
+		AND pl.special_teams_type IS NULL
+	group by pl.play_id
+		,pl.game_id
+		,season
+		,offense
+		,defense
+	having count(rolling_average_grade) < 21
+	and count(player) > 0
+	order by pl.game_id
+
+
+
+
+select *
+from #temp_grades_of_players_used
+where PFF_PLAY_ID = 3965856
+
+select *
+from #temp_pff_season_pos
+where player_id = 57272
+
+
+
+
+
+
+
