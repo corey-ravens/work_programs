@@ -1,0 +1,110 @@
+
+
+
+	-- Check if #temp_trades exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_trades') IS NOT NULL
+	DROP TABLE #temp_trades
+
+	SELECT tr.*
+		,CASE WHEN PlayerID IS NOT NULL THEN CONCAT(last_name,', ',goes_by,' (',po.translation,')') ELSE NULL END AS player_traded
+	INTO #temp_trades
+	FROM [ClubDB].[dbo].[Trade] tr
+	LEFT JOIN BaneProductionAnalytics.dbo.players pl
+		ON tr.PlayerID = pl.nfl_id
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE season >= 2009
+
+
+
+	-- Check if #temp_trade_packages exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_trade_packages') IS NOT NULL
+	DROP TABLE #temp_trade_packages
+
+	SELECT TradeID
+		,ClubID
+		,ToClubID
+		,TradeDate
+		,Season
+		,HasConditions
+		,pick_package = STUFF((SELECT ' * ' + CONCAT(SelectionSeason,': Round ',SelectionRound)
+					FROM #temp_trades r2
+					WHERE r1.TradeID = r2.TradeID
+						AND r1.VersionNumber = r2.VersionNumber
+						AND r1.Season = r2.Season
+						AND r1.TradeDate = r2.TradeDate
+						AND r1.ClubID = r2.ClubID
+					FOR XML PATH('')), 1, 1, '')
+		,player_package = STUFF((SELECT ' / ' + player_traded
+					FROM #temp_trades r2
+					WHERE r1.TradeID = r2.TradeID
+						AND r1.VersionNumber = r2.VersionNumber
+						AND r1.Season = r2.Season
+						AND r1.TradeDate = r2.TradeDate
+						AND r1.ClubID = r2.ClubID
+					FOR XML PATH('')), 1, 1, '')
+	INTO #temp_trade_packages
+	FROM #temp_trades r1
+	GROUP BY TradeID
+		,VersionNumber
+		,Season
+		,TradeDate
+		,ClubID
+		,ToClubID
+		,HasConditions
+	ORDER BY TradeID
+		,ClubID
+
+
+	-- Check if #temp_trade_packages_cleaned exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_trade_packages_cleaned') IS NOT NULL
+	DROP TABLE #temp_trade_packages_cleaned
+
+	SELECT t1.TradeID
+		,t1.ClubID
+		,T1.ToClubID
+		,fcl.code AS from_club
+		,Season
+		,TradeDate
+		,HasConditions
+		,CASE WHEN LTRIM(RTRIM(pick_package)) = '* : Round' THEN NULL
+			WHEN LTRIM(RTRIM(pick_package)) = '* : Round  * : Round' THEN NULL
+			WHEN LTRIM(RTRIM(pick_package)) = '* : Round  * : Round  * : Round' THEN NULL
+			ELSE REPLACE(REPLACE(REPLACE(CONCAT('*',pick_package),'** ',''),' * ',', '),', : Round ','')
+		END AS pick_package
+		,CASE WHEN player_package IS NULL THEN NULL ELSE REPLACE(CONCAT('*',player_package),'*/ ','') END AS player_package
+	INTO #temp_trade_packages_cleaned
+	FROM #temp_trade_packages t1
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs fcl
+		ON t1.ClubID = fcl.nfl_club_id
+		AND fcl.is_disabled = 0
+
+	
+	-- Check if #temp_trade_packages_concat exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_trade_packages_concat') IS NOT NULL
+	DROP TABLE #temp_trade_packages_concat
+
+	SELECT *
+		,CASE WHEN pick_package IS NOT NULL AND player_package IS NOT NULL THEN CONCAT(pick_package,' & ' ,REPLACE(player_package,'/','&'))
+			WHEN pick_package IS NOT NULL AND player_package IS NULL THEN pick_package
+			WHEN pick_package IS NULL AND player_package IS NOT NULL THEN REPLACE(player_package,'/','&')
+		END AS trade_package
+		,CASE WHEN player_package IS NULL THEN 1 ELSE 0 END AS picks_only
+	INTO #temp_trade_packages_concat
+	FROM #temp_trade_packages_cleaned
+
+
+	SELECT t1.TradeID
+		,t1.Season
+		,t1.TradeDate
+		,t1.from_club AS club_1
+		,t2.from_club AS club_2
+		,t1.trade_package AS package_1
+		,t2.trade_package AS package_2
+		,CASE WHEN t1.picks_only = 1 AND t2.picks_only = 1 THEN 1 ELSE 0 END AS picks_only
+		,t1.HasConditions
+	FROM #temp_trade_packages_concat t1
+	LEFT JOIN #temp_trade_packages_concat t2
+		ON T1.TradeID = T2.TradeID
+		AND t1.ClubID <> t2.ClubID
+
