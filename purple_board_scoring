@@ -5,7 +5,7 @@
 This program is for scoring the Purple Board Draft
 
 *****Remember to dock Jah Reid a half point because he was active when drafted*****
-and huner sharp was drafted after his play time, and isaiah battle, add 3.05 for jace billingsley
+and hunter sharp was drafted after his play time, and isaiah battle, add 3.05 for jace billingsley
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
@@ -24,10 +24,16 @@ IF OBJECT_ID('tempdb..#temp_act_inact') IS NOT NULL
 		,SUM(CASE WHEN status_roster_simple = 'ACTIVE' THEN 1 ELSE 0 END) AS games_active
 		,SUM(CASE WHEN status_roster_simple = 'INACTIVE' THEN 1 ELSE 0 END) AS games_inactive
 	INTO #temp_act_inact
-	FROM Analytics.dbo.analysis_players_gameweek_status
+	FROM Analytics.dbo.analysis_players_gameweek_status gs
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON gs.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN AnalyticsWork.dbo.purple_board_draft_2018 sd
+		ON pl.id = sd.bane_player_id
 	WHERE season >= 2018
 		AND UPPER(season_type) = 'REG'
 		AND [week] >= 4
+		AND game_datetime >= sd.date_added
 	GROUP BY nfl_player_id
 
 
@@ -49,9 +55,15 @@ IF OBJECT_ID('tempdb..#temp_playtime') IS NOT NULL
 	FROM [Analytics].dbo.stage_players_game_playtime pt
 	INNER JOIN BaneProductionAnalytics.dbo.pro_games ga
 		ON pt.nfl_game_key = ga.nfl_game_key
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON pt.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN AnalyticsWork.dbo.purple_board_draft_2018 sd
+		ON pl.id = sd.bane_player_id
 	WHERE pt.season >= 2018
 		AND UPPER(pt.season_type) = 'REG'
 		AND ga.[week] >= 4
+		AND ga.[date] >= sd.date_added
 	GROUP BY nfl_player_id
 
 
