@@ -1,0 +1,98 @@
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+This program is for scoring the Purple Board Draft
+
+*****Remember to dock Jah Reid a half point because he was active when drafted*****
+and huner sharp was drafted after his play time, and isaiah battle, add 3.05 for jace billingsley
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the number of games Active / Inactive / on Practice Squad
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_act_inact exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_act_inact') IS NOT NULL
+	DROP TABLE #temp_act_inact
+
+	SELECT nfl_player_id
+		,SUM(CASE WHEN status_roster_simple = 'ACTIVE' THEN 1 ELSE 0 END) AS games_active
+		,SUM(CASE WHEN status_roster_simple = 'INACTIVE' THEN 1 ELSE 0 END) AS games_inactive
+	INTO #temp_act_inact
+	FROM Analytics.dbo.analysis_players_gameweek_status
+	WHERE season >= 2018
+		AND UPPER(season_type) = 'REG'
+		AND [week] >= 4
+	GROUP BY nfl_player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up players' playtime as of the draft (week 4 of 2018).
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_playtime exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_playtime') IS NOT NULL
+	DROP TABLE #temp_playtime
+
+	SELECT nfl_player_id
+		,SUM(snap_count_od) AS snaps_od
+		,SUM(snap_count_4_phase) AS snaps_st
+		,SUM(snap_count_od) * 0.1 + SUM(snap_count_4_phase) * 0.05 AS play_points
+	INTO #temp_playtime
+	FROM [Analytics].dbo.stage_players_game_playtime pt
+	INNER JOIN BaneProductionAnalytics.dbo.pro_games ga
+		ON pt.nfl_game_key = ga.nfl_game_key
+	WHERE pt.season >= 2018
+		AND UPPER(pt.season_type) = 'REG'
+		AND ga.[week] >= 4
+	GROUP BY nfl_player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+This program is for scoring the Shadow Draft
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	SELECT CONCAT(sd.scout_1,' / ',sd.scout_2) AS scout
+		,CONCAT(sd.last_name,', ',sd.goes_by) AS player
+		,cc.code AS team
+		,po.translation AS position
+		,description_short AS current_status
+		,games_active
+		,games_inactive
+		,snaps_od
+		,snaps_st
+		--,play_points
+		,COALESCE(COALESCE(games_active,0) * 1.0 + COALESCE(games_inactive,0) * 0.5 + COALESCE(play_points,0),0) AS total_points
+		--,date_added
+	FROM AnalyticsWork.dbo.purple_board_draft_2018 sd
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON sd.bane_player_id = pl.id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.users us
+		ON sd.scout_1_id = us.id
+	INNER JOIN BaneProductionAnalytics.dbo.users us2
+		ON sd.scout_2_id = us2.id
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cc
+		ON pl.current_club_id = cc.id
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON pl.ncaa_club_id = sc.id
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.statuses st
+		ON pl.status_id = st.id
+	LEFT JOIN #temp_playtime eq
+		ON pl.nfl_id = eq.nfl_player_id
+	LEFT JOIN #temp_act_inact aip
+		ON pl.nfl_id = aip.nfl_player_id
+	WHERE date_dropped IS NULL
+
+
