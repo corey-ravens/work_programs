@@ -1,0 +1,370 @@
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+(1)
+
+
+Get your player universe...all 90 man rosters as of week 1 preseason since 2013.
+
+OUTPUT TABLES:
+#temp_player_universe
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_player_universe exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_player_universe') IS NOT NULL
+	DROP TABLE #temp_player_universe
+
+	SELECT DISTINCT nfl_player_id
+		,pl.id AS bane_player_id
+	INTO #temp_player_universe
+	FROM Analytics.dbo.analysis_players_gameweek_status gw
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON gw.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE season >= 2013
+		AND season_type = 'pre'
+		AND [week] = 1
+		AND status_roster_simple in ('active','inactive')
+
+-- Check if #temp_cuts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_cuts') IS NOT NULL
+	DROP TABLE #temp_cuts
+
+	SELECT DISTINCT PlayerID
+		,season
+		,accrued_seasons
+		,1 AS early_cut
+	INTO #temp_cuts
+	FROM ProDB.dbo.TransactionTable tt
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON tt.PlayerID = pl.nfl_id
+		AND tt.season = pl.draft_year
+	WHERE season >= 2013
+		AND (MONTH(transactiondate) = 8 OR (MONTH(transactiondate) = 9 and day(transactiondate) = 1))
+		and TransactionDescAbbr IN ('RL01','RL07','RL09','RL12','RL13','RL14','RL15','RL16','RL17','RL18', 'WA01','WA02','WA03','WA04','WA05','WA06','WA07','WA09','WA11','WA12','WA13','WA14','WA15','WA16','WA23','WA24','WA25','WA26','WA33','WA42','WA43','WA44','WA45','WA46','WA47','WA48')
+		AND PlayerID IN (SELECT nfl_player_id FROM #temp_player_universe)
+	order by accrued_seasons desc
+
+	
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+(2)
+
+
+Get down to one row of draft board position. Take a players draft
+board position from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_boards_with_order
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_boards exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_boards') IS NOT NULL
+	DROP TABLE #temp_draft_boards
+
+	SELECT player_id AS bane_player_id
+		,db.id
+		,CASE WHEN position_translation IN ('RUSH','SAM') THEN 'OB'
+			WHEN position_translation IN ('FS','SS') THEN 'DS'
+			WHEN position_translation IN ('RB','OH') THEN 'RB'
+			WHEN position_translation IN ('WR','WO') THEN 'WR'
+			--WHEN position_translation IN ('DT','DE') THEN 'DE'
+			ELSE position_translation
+		END AS position
+		,gr.[value] AS grade_bucket
+		,position_rank
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-DEC' THEN 4
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DEC' THEN 5
+			ELSE NULL
+		END AS order_by		
+	INTO #temp_draft_boards
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades] db
+	LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+		ON db.grade_id = gr.id
+	WHERE UPPER(LTRIM(RTRIM([type]))) IN ('PRE-DRAFT','POST-APR','POST-FEB','POST-DEC','PRE-DEC')
+		AND position != ''
+		AND position IS NOT NULL
+		AND position_translation NOT IN ('RS','ST')
+		AND draft_year >= 2013
+
+
+-- Check if #temp_draft_boards_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_boards_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_boards_with_order
+
+	SELECT bane_player_id
+		,position
+		,grade_bucket
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by, position_rank, id) AS draft_board_position_order
+	INTO #temp_draft_boards_with_order
+	FROM #temp_draft_boards
+
+
+-- Check if #temp_draft_boards_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_boards_latest') IS NOT NULL
+	DROP TABLE #temp_draft_boards_latest
+
+	SELECT *
+	INTO #temp_draft_boards_latest
+	FROM #temp_draft_boards_with_order
+	WHERE draft_board_position_order = 1
+
+
+-- Check if #temp_max_college_grade exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_max_college_grade') IS NOT NULL
+	DROP TABLE #temp_max_college_grade
+
+	SELECT re.player_id AS bane_player_id	
+		,MAX(CAST(gr.[value] AS NUMERIC(3,1))) AS college_grade
+	INTO #temp_max_college_grade
+	FROM [BaneProductionAnalytics].dbo.reports re
+	LEFT JOIN [BaneProductionAnalytics].dbo.grades gr
+		ON re.grade_id = gr.id
+	WHERE re.[type] IN ('fall','cross-check','post cc')
+		AND re.is_deleted = 0
+	GROUP BY re.player_id
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with a player's playtime.
+
+OUTPUT TABLES:
+#temp_on_roster_last_year
+#temp_play_times
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+-- Check if #temp_on_roster_last_year exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_on_roster_last_year') IS NOT NULL
+	DROP TABLE #temp_on_roster_last_year
+
+	SELECT season	
+		,nfl_player_id
+		,CASE WHEN SUM(CASE WHEN status_roster_simple IN ('ACTIVE','INACTIVE') THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS on_roster
+		,CASE WHEN SUM(CASE WHEN status_roster_simple IN ('PRACTICESQUAD') THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS on_ps
+		,CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS on_roster_or_ps
+		,SUM(CASE WHEN status_roster_simple IN ('ACTIVE','INACTIVE') THEN 1 ELSE 0 END) AS weeks_on_roster
+		,SUM(CASE WHEN status_roster_simple IN ('ACTIVE','INACTIVE') THEN 1 ELSE 0 END) AS weeks_active
+	INTO #temp_on_roster_last_year
+	FROM Analytics.dbo.analysis_players_gameweek_status gs
+	WHERE season >= 2013
+		AND UPPER(season_type) = 'REG'
+		AND status_roster_simple IN ('ACTIVE','INACTIVE','PRACTICESQUAD')
+	GROUP BY season
+		,nfl_player_id
+
+
+-- Check if #temp_play_times exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_play_times') IS NOT NULL
+	DROP TABLE #temp_play_times
+
+	SELECT nfl_player_id
+		,season
+		,SUM(snap_count_od) AS snap_count_od
+		,SUM(snap_count_4_phase) AS snap_count_4_phase
+		,SUM(equivalent_games) AS equivalent_games
+		,SUM(equivalent_games_off_def) AS equivalent_games_off_def
+	INTO #temp_play_times
+	FROM Analytics.dbo.stage_players_season_playtime pt
+	WHERE pt.season >= 2013
+		AND UPPER(season_type) = 'REG' 
+	GROUP BY nfl_player_id
+		,season
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get all the different model grades
+
+OUTPUT TABLES:
+#temp_model_grades
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_model_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_model_grades') IS NOT NULL
+	DROP TABLE #temp_model_grades
+
+	SELECT p.*,
+		c.final_prediction as component_grades,
+		f.final_prediction as final_no_measurables,
+		fm.final_prediction as final_with_measurables,
+		n.final_prediction as no_grades_no_measurables,
+		nm.final_prediction as no_grades_with_measurables,
+		fs.final_prediction as final_summarized_no_measurables,
+		fsm.final_prediction as final_summarized_with_measurables,
+		ngs.final_prediction as no_grades_summarized_no_measurables,
+		ngsm.final_prediction as no_grades_summarized_with_measurables,
+		m.final_prediction as measurables,
+		prod.final_prediction as production,
+		gr.[value] AS model_grade
+	INTO #temp_model_grades
+	FROM
+		(SELECT DISTINCT bane_player_id, player, draft_year,
+		conference_name, conference_division, is_power_five, pct_of_cap,
+		position_bane_direct, position_group, board_grade_final,
+		MAX(grade_bucket) as max_grade,
+		wp_0, wp_1, wp_2, school
+		FROM Analytics.dbo.r_input_draft_model_post_combine
+		WHERE report_type != 'coach'
+		GROUP BY bane_player_id, player, draft_year,
+		conference_name, conference_division, is_power_five, pct_of_cap,
+		position_bane_direct, position_group, board_grade_final,
+		wp_0, wp_1, wp_2, school) AS p
+	LEFT JOIN AnalyticsWork.dbo.final_model_bootstrap_no_draft_year_components_scores_all as c
+		ON c.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_bootstrap_no_draft_year_final_scores_all as f
+		ON f.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_bootstrap_no_draft_year_final_with_measurables_scores_all as fm
+		ON fm.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_bootstrap_no_draft_year_no_grades_scores_all as n
+		ON n.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_bootstrap_no_draft_year_no_grades_with_measurables_scores_all as nm
+		ON nm.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_summarized_bootstrap_no_draft_year_final as fs
+		ON fs.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_summarized_bootstrap_no_draft_year_final_with_measurables as fsm
+		ON fsm.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_summarized_bootstrap_no_draft_year_no_grades as ngs
+		ON ngs.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.final_model_summarized_bootstrap_no_draft_year_no_grades_with_measurables as ngsm
+		ON ngsm.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.measurables_score as m
+		ON m.bane_player_id = p.bane_player_id
+	LEFT JOIN AnalyticsWork.dbo.pre_combine_production_scores_rf as prod
+		ON prod.bane_player_id = p.bane_player_id
+	LEFT JOIN Analytics.dbo.analysis_players_draft_model_grades dmg
+		ON p.bane_player_id = dmg.bane_player_id
+		AND dmg.draft_model_year = 2020
+		AND dmg.draft_model_version = 'post_combine'
+		AND dmg.secondary_position = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.grades gr
+		ON dmg.model_without_board_grade_id = gr.id
+	WHERE draft_year > 2012 
+		AND draft_year < 2021
+		AND position_group != 'ST'
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join everything for modeling
+
+OUTPUT TABLES:
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--TRUNCATE TABLE AnalyticsDevelopment.dbo.work_study_90_to_80
+--INSERT INTO AnalyticsDevelopment.dbo.work_study_90_to_80
+
+	SELECT un.bane_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,sc.code AS school
+		,ISNULL(db.position,po.translation) AS position
+		,pl.draft_year
+		,CASE WHEN pl.draft_year < 2021 AND draft_round IS NULL THEN 8 ELSE draft_round END AS draft_round
+		,CASE WHEN pl.draft_year < 2021 AND draft_round IS NULL THEN 300 ELSE draft_number END AS draft_number
+		,final_no_measurables
+		,final_with_measurables
+		,no_grades_no_measurables
+		,no_grades_with_measurables
+		,final_summarized_no_measurables
+		,final_summarized_with_measurables
+		,no_grades_summarized_no_measurables
+		,no_grades_summarized_with_measurables
+		,component_grades
+		,measurables
+		,production
+		,model_grade
+		,CASE WHEN db.grade_bucket IS NULL OR db.grade_bucket = '2.0' THEN CASE WHEN cg.college_grade >= 5.6 THEN 5.6 ELSE 5.4 END ELSE db.grade_bucket END AS board_grade
+		,CASE WHEN cg.college_grade IS NULL OR cg.college_grade = 2 THEN 5.4 ELSE cg.college_grade END AS max_grade
+		,CASE WHEN pl.draft_year >= 2020 THEN NULL ELSE COALESCE(on_roster,0) END AS on_roster
+		,CASE WHEN pl.draft_year >= 2020 THEN NULL ELSE COALESCE(weeks_on_roster,0) END AS weeks_on_roster
+		,CASE WHEN pl.draft_year >= 2020 THEN NULL ELSE COALESCE(weeks_active,0) END AS weeks_active
+		,CASE WHEN pl.draft_year >= 2020 THEN NULL ELSE COALESCE(snap_count_od,0) END AS snap_count_od
+		,CASE WHEN pl.draft_year >= 2020 THEN NULL ELSE COALESCE(snap_count_4_phase,0) END AS snap_count_4_phase
+		,CASE WHEN pl.draft_year >= 2020 THEN NULL ELSE COALESCE(equivalent_games,0) END AS equivalent_games
+		,CASE WHEN pl.draft_year >= 2020 THEN NULL ELSE COALESCE(equivalent_games_off_def,0) END AS equivalent_games_off_def 
+		,cu.early_cut
+	FROM #temp_player_universe un
+	LEFT JOIN #temp_model_grades mo
+		ON un.bane_player_id = mo.bane_player_id
+	LEFT JOIN #temp_draft_boards_latest db
+		ON un.bane_player_id = db.bane_player_id
+	LEFT JOIN #temp_max_college_grade cg
+		ON un.bane_player_id = cg.bane_player_id
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON un.bane_player_id = pl.id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+		ON pl.ncaa_club_id = sc.id
+	LEFT JOIN #temp_play_times pt
+		ON pl.nfl_id = pt.nfl_player_id
+		AND pl.draft_year = pt.season
+	LEFT JOIN #temp_on_roster_last_year oro
+		ON pl.nfl_id = oro.nfl_player_id
+		AND pl.draft_year = oro.season
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN #temp_cuts cu
+		ON un.nfl_player_id = cu.PlayerID
+	WHERE pl.draft_year < 2021
+
+
+--SELECT *
+--FROM AnalyticsDevelopment.dbo.work_study_90_to_80
+
+SELECT pl.draft_round
+	,cl.code
+	,mo.*
+	,pl.*
+FROM #temp_model_grades mo
+INNER JOIN BaneProductionAnalytics.dbo.players pl
+	ON mo.bane_player_id = pl.id
+	AND pl.is_deleted = 0
+INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+	ON pl.current_club_id = cl.id
+	AND cl.is_disabled = 0
+WHERE pl.draft_year between 2013 and 2019
+	AND (pl.draft_round IS NULL OR pl.draft_round = 7)
+
+
+SELECT CONCAT(last_name,', ',goes_by) AS player
+,cl.code
+,translation
+,pl.draft_round
+,dm.model_without_board_score
+FROM BaneProductionAnalytics.dbo.players pl
+LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+	ON pl.current_club_id = cl.id
+	AND cl.is_disabled = 0
+LEFT JOIN Analytics.dbo.analysis_players_draft_model_grades dm
+	ON pl.id = dm.bane_player_id
+	AND dm.draft_model_year = 2020
+	AND dm.draft_model_version = 'post_combine'
+LEFT JOIN BaneProductionAnalytics.dbo.positions po
+	ON pl.position_id = po.id
+WHERE pl.is_deleted = 0
+	AND pl.draft_year = 2018
+	AND nfl_entry_club_id = 5
+ORDER BY cl.code
+	,model_without_board_score DESC
+
+SELECT *
+FROM BaneProductionAnalytics.dbo.players pl
+WHERE nfl_entry_club_id = 5
+AND draft_year = 2019
+order by draft_round
