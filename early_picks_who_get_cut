@@ -1,0 +1,147 @@
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+This program looks at players who are drafted in the 1st or second round and cut
+or traded from their entry team. Do they ever end up making it?
+
+High picks round 1-2 who get cut or traded by first team, do they ever become a player?
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join club ids to the transaction table
+
+OUTPUT TABLES:
+##temp_transactions_with_club_ids
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_transactions_with_club_ids exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_transactions_with_club_ids') IS NOT NULL
+	DROP TABLE ##temp_transactions_with_club_ids
+
+    SELECT tt.*
+		  ,ClubID AS nfl_club_id
+		  ,Club_Code AS nfl_club_code
+	  INTO ##temp_transactions_with_club_ids
+	  FROM ProDB.dbo.TransactionTable tt
+INNER JOIN ProDB.DBO.Club cl
+		ON tt.StartClubFullName = cl.Club_Name
+	   AND tt.season = cl.season
+	 WHERE tt.LeagueType = 'NFL'
+	   AND (TransactionDescAbbr = 'RL09'
+		OR TransactionDescAbbr LIKE 'W0%'
+		OR TransactionDescAbbr LIKE 'WA%'
+		OR TransactionDescAbbr IN ('TR01','T01','TE01','TE02'))
+	   AND tt.season >= 2005
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table that has all the 1st & 2nd Round picks since 2005
+
+OUTPUT TABLES:
+##temp_high_picks
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_high_picks exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_high_picks') IS NOT NULL
+	DROP TABLE ##temp_high_picks
+
+    SELECT DISTINCT pl.nfl_id AS nfl_player_id
+		  ,pl.id AS bane_player_id
+		  ,CONCAT(last_name,', ',goes_by) AS player
+		  ,cl.code AS entry_team
+		  ,tt.nfl_club_code
+		  ,nfl_entry_year AS entry_year
+		  ,draft_round
+		  ,accrued_seasons
+		  ,TransactionDesc
+		  ,TransactionDescAbbr
+		  ,StartClubAbbr
+		  ,ResultClubAbbr	
+		  ,tt.season AS season_cut
+		  ,nfl_entry_year + 3 AS fourth_season_in_league
+		  ,tt.nfl_club_id AS transaction_club_id
+		  ,cl.nfl_club_id AS entry_club_id
+      INTO ##temp_high_picks
+	  FROM BaneProductionAnalytics.dbo.players pl
+ LEFT JOIN ##temp_transactions_with_club_ids tt
+		ON pl.nfl_id = tt.PlayerID
+ LEFT JOIN BaneProductionAnalytics.DBO.clubs cl
+	    ON pl.nfl_entry_club_id = cl.id
+	 WHERE nfl_entry_year >= 2005
+	   AND draft_round IN (1,2)
+	   AND tt.season <= (nfl_entry_year + 3)
+	   AND (tt.nfl_club_id = cl.nfl_club_id OR tt.nfl_club_code = cl.code)
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find out how much these players go on to play after getting cut
+
+OUTPUT TABLES:
+##temp_eqg_after_cut
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_eqg_after_cut exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_eqg_after_cut') IS NOT NULL
+	DROP TABLE ##temp_eqg_after_cut
+
+    SELECT hp.nfl_player_id
+		  ,SUM(equivalent_games) AS games_played_after_cut
+	  INTO ##temp_eqg_after_cut
+	  FROM ##temp_high_picks hp
+INNER JOIN Analytics.dbo.stage_players_game_playtime pt
+		ON hp.nfl_player_id = pt.nfl_player_id
+	 WHERE pt.season >= season_cut
+	   AND UPPER(pt.season_type) = 'REG'
+	   AND hp.entry_club_id <> pt.nfl_club_id
+  GROUP BY hp.nfl_player_id
+  ORDER BY hp.nfl_player_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the games played to the cut players list
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+    SELECT hp.*
+		  ,games_played_after_cut
+	  FROM ##temp_high_picks hp
+ LEFT JOIN ##temp_eqg_after_cut eq
+		ON hp.nfl_player_id = eq.nfl_player_id
+
+
+
+
+
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get the max pro grade of a player
+
+OUTPUT TABLES:
+##temp_max_grade
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+
+    SELECT hp.*
+		  ,(SELECT MAX(grade_value) FROM Analytics.dbo.work_player_season_pro_grades pg WHERE pg.bane_player_id = hp.bane_player_id AND pg.report_season >= hp.season_cut GROUP BY pg.bane_player_id )
+		  ,(SELECT MAX(grade_bucket) FROM Analytics.dbo.work_player_season_pro_grades pg WHERE pg.bane_player_id = hp.bane_player_id AND pg.report_season >= hp.season_cut GROUP BY pg.bane_player_id )
+	  FROM ##temp_high_picks hp
+
