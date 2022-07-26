@@ -1,0 +1,133 @@
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Add the Signing Team to the transaction table
+
+OUTPUT TABLES:
+#temp_transactions
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_transactions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_transactions') IS NOT NULL
+	DROP TABLE #temp_transactions
+
+    SELECT transid
+          ,PlayerID
+          ,dtLoadDate
+          ,Transactiondate
+          ,Season
+          ,InitialTransStatusDescAbbr
+          ,ResultTransStatusDescAbbr
+          ,TransactionDesc
+          ,StartClubAbbr
+          ,ResultClubAbbr
+          ,PotentialClubAbbr
+          ,PcmsContractID
+          ,Comments1
+          ,Comments2
+          ,InitialTransStatusShortDesc
+          ,InitialTransStatusDesc
+          ,ResultTransStatusShortDesc
+          ,ResultTransStatusDesc
+          ,TransactionDescAbbr
+          ,StartClubFullName
+          ,ResultClubFullName
+          ,PotentialClubFullName
+          ,OrderBy
+          ,ToDate
+          ,TransStatus
+          ,LeagueType
+          ,sc.id AS start_club_bane_id
+          ,rc.id AS result_club_bane_id
+          ,pc.id AS potential_club_bane_id
+	      ,CASE WHEN LEAD(TransactionDesc) OVER (PARTITION BY PlayerID, Season ORDER BY OrderBy) = 'Free Agent Signing' THEN LEAD(ResultClubAbbr) OVER (PARTITION BY PlayerID, Season ORDER BY OrderBy) ELSE NULL END AS SigningTeam
+      INTO #temp_transactions
+	  FROM ProDB.dbo.TransactionTable tt
+ LEFT JOIN BaneProductionAnalytics.dbo.clubs rc
+	    ON LTRIM(RTRIM(tt.ResultClubAbbr)) = LTRIM(RTRIM(rc.code))
+	  --AND rc.is_disabled = 0
+ LEFT JOIN BaneProductionAnalytics.dbo.clubs sc
+	    ON LTRIM(RTRIM(tt.StartClubAbbr)) = LTRIM(RTRIM(sc.code))
+	  --AND sc.is_disabled = 0
+ LEFT JOIN BaneProductionAnalytics.dbo.clubs pc
+	    ON LTRIM(RTRIM(tt.PotentialClubAbbr)) = LTRIM(RTRIM(pc.code))
+	  --AND pc.is_disabled = 0
+     WHERE 1=1
+	   AND LeagueType = 'NFL'
+	   AND TransStatus = 30
+       AND Transactiondate >= '09/03/2016'
+  ORDER BY PlayerID
+	      ,OrderBy DESC
+  
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the number of IR or cuts per team per day. So you can join to the day of the transaction on the promotion.
+
+OUTPUT TABLES:
+#temp_removal_counts
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_removal_counts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_removal_counts') IS NOT NULL
+	DROP TABLE #temp_removal_counts
+
+    SELECT start_club_bane_id
+	      ,StartClubAbbr AS start_club_abbreviation
+          ,Transactiondate
+          ,SUM(CASE WHEN TransactionDescAbbr IN ('RE01','RE14','RE15','RE18','RE40') THEN 1 ELSE 0 END) AS players_placed_on_reserve
+		  ,SUM(CASE WHEN TransactionDescAbbr IN ('WA02','WA04','WA05','WA46','WA47','WA48','RL09','RL12') THEN 1 ELSE 0 END) AS players_cut
+		  ,SUM(CASE WHEN TransactionDescAbbr IN ('WA02','WA04','WA05','WA46','WA47','WA48','RL09','RL12','RE01','RE14','RE15','RE18','RE40') THEN 1 ELSE 0 END) AS players_removed_from_roster
+      INTO #temp_removal_counts
+	  FROM #temp_transactions
+	 WHERE TransactionDescAbbr IN ('WA02','WA04','WA05','WA46','WA47','WA48','RL09','RL12','RE01','RE14','RE15','RE18','RE40')
+  GROUP BY start_club_bane_id
+		  ,StartClubAbbr
+          ,Transactiondate
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the PS promotion table
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+    SELECT --PlayerID AS nfl_player_id
+	       StartClubAbbr AS 'PS Team'
+	      ,SigningTeam AS '53 Team'
+	      --,cl.code AS 'Roster'
+          ,CONCAT(last_name,', ',goes_by) AS 'Player'
+	      ,po.translation AS 'Pos'
+          ,sc.code AS 'College'	 
+	      ,nfl_entry_year AS 'Draft Year'
+	      ,draft_round AS 'Round' 
+	      --,description_short AS 'Current Status'
+          ,tt.Transactiondate AS 'Date'
+		  ,players_placed_on_reserve
+		  ,players_cut
+		  ,players_removed_from_roster
+		  ,CASE WHEN players_placed_on_reserve > 0 THEN 1 ELSE 0 END AS corresponding_reserve
+		  ,CASE WHEN players_cut > 0 THEN 1 ELSE 0 END AS corresponding_cut
+		  ,CASE WHEN players_removed_from_roster > 0 THEN 1 ELSE 0 END AS corresponding_removal
+      FROM #temp_transactions tt
+INNER JOIN BaneProductionAnalytics.dbo.players pl
+	    ON tt.PlayerID = pl.nfl_id
+INNER JOIN BaneProductionAnalytics.dbo.statuses st
+	    ON pl.status_id = st.id
+ LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+	    ON pl.current_club_id = cl.id
+	   AND cl.is_disabled = 0
+ LEFT JOIN BaneProductionAnalytics.dbo.schools sc
+	    ON pl.ncaa_club_id = sc.id
+ LEFT JOIN BaneProductionAnalytics.dbo.positions po
+	    ON pl.position_id = po.id
+ LEFT JOIN #temp_removal_counts rc
+		ON tt.SigningTeam = rc.start_club_abbreviation
+	   AND tt.Transactiondate = rc.Transactiondate
+     WHERE TransactionDesc IN ('Terminated (by Player) from Practice Squad')
+	  --AND TransactionDescAbbr IN ('FA10')
+	  --AND description_short = 'Free Agent'
+  ORDER BY tt.PlayerID
+		  ,tt.Transactiondate DESC
