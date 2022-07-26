@@ -1,0 +1,252 @@
+
+
+-- Check if #temp_ngs_pressures exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_ngs_pressures') IS NOT NULL
+	DROP TABLE #temp_ngs_pressures
+
+	SELECT su.[nfl_id]
+		,su.[first_name]
+		,su.[last_name]
+		,po.translation
+		,[plays]
+		,[season]
+		,RANK() OVER (PARTITION BY season ORDER BY peak_pressure_30 / plays) AS ngs_pressure_rank
+		,peak_pressure_30 / plays AS ngs_pressure_rate
+	INTO #temp_ngs_pressures
+	FROM [NextGen].[dbo].[summary_pressure] su
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON su.nfl_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE in_out = 'out'
+		AND looper = 0
+		AND unblocked = 0
+		AND plays >= 100
+		AND po.translation IN ('OB','DE')
+	ORDER BY season, [peak_pressure_30] / plays
+
+
+-- Check if #temp_ngs_pressures_percentiles exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_ngs_pressures_percentiles') IS NOT NULL
+	DROP TABLE #temp_ngs_pressures_percentiles
+
+	SELECT *
+		,((SELECT COUNT(*) FROM #temp_ngs_pressures ns2 WHERE ns2.season = ns.season) - ngs_pressure_rank + 1) / CAST((SELECT COUNT(*) FROM #temp_ngs_pressures ns2 WHERE ns2.season = ns.season) AS FLOAT) AS near_sacks_percentile
+	INTO #temp_ngs_pressures_percentiles
+	FROM #temp_ngs_pressures ns
+
+
+
+-- Check if #temp_near_sacks exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_near_sacks') IS NOT NULL
+	DROP TABLE #temp_near_sacks
+
+	SELECT sa.[nfl_id]
+		,sa.[first_name]
+		,sa.[last_name]
+		,po.translation
+		,sa.[season]
+		,[near_sacks]
+		,[near_sacks_raw] / play_count_pass_sum AS near_sacks_raw_rate
+		,play_count_pass_sum
+		,RANK() OVER (PARTITION BY sa.season ORDER BY near_sacks_raw DESC) AS near_sacks_rank
+	INTO #temp_near_sacks
+	FROM [NextGen].[dbo].[summary_near_sacks] sa
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON sa.nfl_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN Analytics.dbo.r_input_stats_pass_rush pr
+		ON sa.nfl_id = pr.nfl_player_id
+		AND sa.season = pr.season
+		AND pr.season_type_adjusted = 'REGPOST'
+		AND pr.rolling_game_stats = 0
+	WHERE po.translation IN ('OB','DE')
+		AND play_count_pass_sum >= 100
+	ORDER BY near_sacks_raw DESC
+
+
+-- Check if #temp_near_sacks_percentiles exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_near_sacks_percentiles') IS NOT NULL
+	DROP TABLE #temp_near_sacks_percentiles
+
+	SELECT *
+		,((SELECT COUNT(*) FROM #temp_near_sacks ns2 WHERE ns2.season = ns.season) - near_sacks_rank + 1) / CAST((SELECT COUNT(*) FROM #temp_near_sacks ns2 WHERE ns2.season = ns.season) AS FLOAT) AS near_sacks_percentile
+	--INTO #temp_near_sacks_percentiles
+	FROM #temp_near_sacks ns
+
+
+-- Check if #temp_prwr exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_prwr') IS NOT NULL
+	DROP TABLE #temp_prwr
+
+	SELECT nfl_player_id
+		,[player_name]
+		,2019 AS season
+		,pass_rush_plays
+		,[pass_rush_win_rate]
+		,RANK() OVER (ORDER BY pass_rush_win_rate DESC) AS prwr_rank
+		,[pass_rush_win_rate_vs_double_team]
+		,RANK() OVER (ORDER BY pass_rush_win_rate_vs_double_team DESC) AS prwr_double_rank
+	INTO #temp_prwr
+	FROM [AnalyticsWork].[dbo].[_prwr] sa
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON sa.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE  po.translation IN ('OB','DE')
+
+
+	INSERT INTO #temp_prwr
+	SELECT PlayerID AS nfl_player_id
+		,CONCAT(LastName,', ', FootballName) AS player_name
+		,2020 AS season
+		,[pass_rush_plays]
+		,[pass_rush_wins] / CAST([pass_rush_plays] AS FLOAT) AS [pass_rush_win_rate]
+		,RANK() OVER (ORDER BY [pass_rush_wins] / CAST([pass_rush_plays] AS FLOAT) DESC) AS prwr_rank
+		,[pass_rush_wins_vs_double] / CAST( [pass_rush_plays_vs_double] AS FLOAT) AS [pass_rush_win_rate_vs_double_team]
+		,RANK() OVER (ORDER BY [pass_rush_wins_vs_double] / CAST( [pass_rush_plays_vs_double] AS FLOAT) DESC) AS prwr_double_rank
+	FROM [AnalyticsScouting].[dbo].[espn_pass_rush_win_rate_2020] pr
+	INNER JOIN ClubDB.dbo.PlayerExtract ex
+		ON pr.elias_player_id = ex.EliasPlayerID
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON ex.PlayerID = pl.nfl_id
+		AND pl.is_deleted = 0
+	INNER JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	WHERE  po.translation IN ('OB','DE')
+		AND pass_rush_plays >= 100
+
+-- Check if #temp_prwr_percentiles exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_prwr_percentiles') IS NOT NULL
+	DROP TABLE #temp_prwr_percentiles
+
+	SELECT *
+		,((SELECT COUNT(*) FROM #temp_prwr ns2 WHERE ns2.season = ns.season) - prwr_rank + 1) / CAST((SELECT COUNT(*) FROM #temp_prwr ns2 WHERE ns2.season = ns.season) AS FLOAT) AS prwr_percentile
+	--INTO #temp_prwr_percentiles
+	FROM #temp_prwr ns
+
+
+
+-- Check if #temp_regressed_statistics exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_regressed_statistics') IS NOT NULL
+	DROP TABLE #temp_regressed_statistics
+
+	SELECT nfl_player_id
+		,CONCAT(last_name,', ',goes_by) AS player
+		,season
+		,statistic_value
+		,statistic_denominator
+		,statistic_grade
+		,statistic_percentile
+	FROM Analytics.dbo.r_output_regressed_statistics rs
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON rs.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE statistic_id = 1
+		AND rolling_game_stats = 0
+		AND season_type_adjusted = 'REGPOST'
+		AND CONCAT(last_name,', ',goes_by) = 'Judon, Matt'
+	ORDER BY season DESC
+
+
+	SELECT sum(qb_sack_sum) as sacks
+		,sum(qb_pressure_sum) AS pressures
+		,sum(qb_sack_sum) / cast(sum(qb_pressure_sum) as float)
+	FROM Analytics.dbo.r_input_stats_pass_rush pr
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON pr.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	WHERE rolling_game_stats = 0
+		AND season_type_adjusted = 'REGPOST'
+		and position_group_blt = 'edge'
+		and pr.season >= 2018
+		group by season
+	ORDER BY season DESC
+
+
+
+
+
+
+	drop table #temp_extra_pressure
+
+	select nfl_player_id
+		,season
+		,SUM(CASE WHEN qb_sack = 1 AND (unblocked = 1 or pursuit_pressure = 1 or clean_up_pressure = 1) THEN 1 ELSE 0 END) AS unblocked_sack
+		,SUM(CASE WHEN qb_pressure = 1 AND unblocked = 1 THEN 1 ELSE 0 END) AS unblocked_pressure
+		,SUM(clean_up_pressure) AS clean_up_pressure
+		,SUM(pursuit_pressure) AS pursuit_pressure
+	INTO #temp_extra_pressure
+	from Analytics.dbo.stage_plays_player_pass_rush pr
+	inner join ANalytics.dbo.stage_plays_play_ancillary an
+		ON pr.pff_play_id = an.pff_play_id
+	where an.season_type_adjusted = 'regpost'
+	group by nfl_player_id
+		,season
+
+
+	SELECT *
+		,unblocked_sack
+		,qb_sack_sum / CAST(qb_pressure_sum AS FLOAT) AS conversion_rate
+		,unblocked_pressure / CAST(qb_pressure_sum + unblocked_pressure AS FLOAT) AS unblocked_percentage
+	FROM Analytics.dbo.r_input_stats_pass_rush pr
+	LEFT JOIN #temp_extra_pressure ee
+		ON pr.nfl_player_id = ee.nfl_player_id
+		AND pr.season = ee.season
+	WHERE rolling_game_stats = 0
+		AND season_type_adjusted = 'REGPOST'
+		AND position_group_blt = 'EDGE'
+		AND qb_pressure_sum >= 10
+		and player = 'jUDON, MATT'
+	ORDER BY pr.season
+
+
+
+	select *
+	from Analytics.dbo.stage_plays_player_pass_rush pr
+	inner join ANalytics.dbo.stage_plays_play_ancillary an
+		ON pr.pff_play_id = an.pff_play_id
+	where an.season_type_adjusted = 'regpost'
+	and nfl_player_id = 43435
+	and pr.pff_play_id in (3557019
+,3570607
+,3571690
+,3694713
+,3714276
+,3776753
+,3785614
+,3796217
+,3819767
+)
+
+select *
+from ProDB.dbo.PlayList
+where GameKey = 58375
+and PlayID = 791
+
+
+
+
+
+
+
+
+
+
+select *
+from Analytics.dbo.analytics_reports re
+inner join Analytics.dbo.analytics_evaluations ev
+	ON re.id = ev.report_id
+where re.exposure = '2020 Season'
+AND RE.player_id = 203146
+AND skill_ID = 1611
+
+UPDATE Analytics.dbo.analytics_evaluations
+set explanation = 'Matt has been a very consistent 6.3 level player the last few seasons.  He always makes more tackles than we would expect and grades out as a very good or excellent playmaker.  He usually grades out as a very good, but not great pass rusher.  He has been in the top 4 in the NFL in terms of “unblocked pressures” in the last three seasons, which to us indicates schemed up pressure rather than pressure generation.  Our market value model says he will provide an APY of $14.4 million the next three seasons.          Mid Season Grade:  6.3'
+where id = 307887
+
+
