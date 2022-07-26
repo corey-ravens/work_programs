@@ -1,0 +1,89 @@
+
+	
+
+
+-- Check if #temp_contracts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_contracts') IS NOT NULL
+	DROP TABLE #temp_contracts
+
+	SELECT *
+	INTO #temp_contracts
+	FROM Analytics.dbo.analysis_players_contracts_NEW
+	WHERE nfl_player_id = 43694
+		OR (nfl_player_id IN (
+		35485
+		,35559
+		,37076
+		,37152
+		,38541
+		,38542
+		,38667
+		,39959
+		,39960
+		,39992
+		,39997
+		,40042
+		,41239
+		,41277
+		,42382
+		)
+	AND contract_record_count = 2)
+
+
+
+
+	SELECT co.nfl_player_id
+		,pr.season
+		,SUM(pr.play_count_pass_sum) AS play_count_pass_sum
+		,SUM(pr.qb_hit_sum) AS qb_hit_sum
+		,SUM(pr.qb_hurry_sum) AS qb_hurry_sum
+		,SUM(pr.qb_sack_sum) AS qb_sack_sum
+		,SUM(pr.qb_pressure_sum) AS qb_pressure_sum
+		,SUM(ta.play_count_run_sum) AS play_count_run_sum
+		,SUM(ta.play_count_sum) AS lay_count_sum
+		,SUM(ta.run_stop_pff_sum) AS run_stop_pff_sum
+		,SUM(ta.stop_pff_sum) AS stop_pff_sum
+		,SUM(ta.tackle_assist_sum) AS tackle_assist_sum
+	FROM #temp_contracts co
+	INNER JOIN Analytics.dbo.r_input_stats_pass_rush pr
+		ON co.nfl_player_id = pr.nfl_player_id
+		AND pr.season BETWEEN co.first_contract_year - 3 AND co.first_contract_year - 1
+		AND pr.season_type_adjusted = 'REGPOST'
+	INNER JOIN Analytics.dbo.r_input_stats_tackling ta
+		ON pr.nfl_player_id = ta.nfl_player_id
+		AND ta.season = pr.season
+		AND ta.season_type_adjusted = 'REGPOST'
+	GROUP BY co.nfl_player_id
+		,pr.season
+	
+	
+
+
+
+
+	
+	SELECT pff_GAMESEASON
+		,pff_OFFTEAM
+		,pff_DEFTEAM
+		,d.pff_PLAYERNAME
+		,CASE WHEN d.pff_PLAYERNAME IS NOT NULL THEN 1 ELSE 0 END AS williams_play
+		,CASE WHEN XPchange > 0 THEN 1 ELSE 0 END AS success_play
+		,pff_GAINLOSSNET	
+	FROM Pff.dbo.PffPlays p
+	INNER JOIN AnalyticsWork.dbo.rd_playfact pf
+		ON p.pff_GSISGAMEKEY = pf.GameKey
+		AND p.pff_GSISPLAYID = pf.PlayID
+	INNER JOIN Analytics.dbo.stage_plays_play_results re
+		ON p.pff_PLAYID = re.pff_play_id
+	LEFT JOIN Pff.dbo.PffDefense d
+		ON p.pff_PLAYID = d.pff_PLAYID
+		AND d.pff_GSISPLAYERID = 43694
+	WHERE pff_GAMESEASON >= 2012
+		AND pff_WEEK NOT LIKE 'P%'
+		AND pff_SPECIALTEAMSTYPE = ''
+		AND pff_NOPLAY = ''
+		AND pff_RUNPASS IN ('R','P')
+		--AND p.pff_PENALTY = ''
+		--AND pff_DEFTEAM = 'BLT'
+		AND pff_DOWN <> '0'
+		
