@@ -1,0 +1,255 @@
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get the unblocked stats.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+	-- Check if  #temp_unblocked exists, if it does drop it
+	IF OBJECT_ID('tempdb..#temp_unblocked') IS NOT NULL
+		DROP TABLE #temp_unblocked
+
+	SELECT *
+	FROM Analytics.dbo.r_input_stats_pass_rush
+	WHERE season_type_adjusted = 'REGPOST'
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the free agents table
+
+OUTPUT TABLES:
+#temp_stats_by_season
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_stats_by_season exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_stats_by_season') IS NOT NULL
+	DROP TABLE #temp_stats_by_season
+
+	SELECT DISTINCT jersey
+		,pr.nfl_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,pr.season
+		,cl.code AS team
+		,ri.position_blt
+		,ri.position_group_blt
+		,CONCAT(CASE WHEN et.statistic_percentile IS NULL THEN -999 ELSE ROUND(et.statistic_percentile * 100,0) END,' (',CASE WHEN et.statistic_value IS NULL THEN -999 ELSE ROUND(et.statistic_value,2) END,')') AS tackle_display
+		,et.statistic_value AS tackle_value
+		,et.statistic_grade AS tackle_grade
+		,et.statistic_percentile AS tackle_percentile
+		,CONCAT(CASE WHEN pr.statistic_percentile IS NULL THEN -999 ELSE ROUND(pr.statistic_percentile * 100,0) END,' (',CASE WHEN pr.statistic_value IS NULL THEN -999 ELSE ROUND(pr.statistic_value*100,1) END,'%)') AS disruption_display
+		,pr.statistic_value AS disruption_value
+		,pr.statistic_grade AS disruption_grade
+		,pr.statistic_percentile AS disruption_percentile
+		,CONCAT(CASE WHEN sr.statistic_percentile IS NULL THEN -999 ELSE ROUND(sr.statistic_percentile * 100,0) END,' (',CASE WHEN sr.statistic_value IS NULL THEN -999 ELSE ROUND(sr.statistic_value*100,1) END,'%)') AS stop_display
+		,sr.statistic_value AS stop_value
+		,sr.statistic_grade AS stop_grade
+		,sr.statistic_percentile AS stop_percentile
+		,CONCAT(CASE WHEN rd.statistic_percentile IS NULL THEN -999 ELSE ROUND(rd.statistic_percentile * 100,0) END,' (',CASE WHEN rd.statistic_value IS NULL THEN -999 ELSE ROUND(rd.statistic_value*100,1) END,'%)') AS run_display
+		,rd.statistic_value AS run_value
+		,rd.statistic_grade AS run_grade
+		,rd.statistic_percentile AS run_percentile
+		,ri.qb_hit_sum + ri.qb_sack_sum AS qb_hit_sum
+		,ri.qb_pressure_sum
+		,ri.qb_sack_sum
+		,CAST(ri.qb_sack_sum AS FLOAT) / NULLIF((ri.qb_hit_sum + ri.qb_sack_sum),0) AS sack_to_hit_rate
+		,CAST(ri.qb_sack_sum AS FLOAT) / NULLIF((ri.qb_pressure_sum),0) AS sack_to_pressure_rate
+		,un.qb_pressure_sum AS qb_pressure_sum_unblocked
+		,un.qb_sack_sum AS qb_sack_sum_unblocked
+		,CAST(un.qb_pressure_sum AS FLOAT) / NULLIF((un.qb_pressure_sum + ri.qb_pressure_sum),0) AS unblocked_pressure_pct
+		,ngs.[pressure_per_play_25]
+		,ngs.[pressure_per_play_30]
+		,ngs.[pressure_per_play_full]
+		,ngs.[peak_pressure_25]
+		,ngs.[peak_pressure_30]
+		,ngs.[peak_pressure_full]
+		,[pass_rush_win_rate]
+		,[pass_rush_wins_vs_double_teams]
+		,[pass_rush_vs_double_teams_w_l]
+		,[pass_rush_win_rate_vs_double_team]
+		,[pass_rush_vs_double_teams]
+		,[pass_rush_vs_double_team_rate]
+		,[pass_rush_wins_single_team]
+		,[pass_rush_vs_single_team]
+		,[pass_rush_win_rate_single_team]
+	INTO #temp_stats_by_season
+	FROM BaneProductionAnalytics.dbo.players pl
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON pl.current_club_id = cl.id
+		AND cl.is_disabled = 0
+	LEFT JOIN Analytics.dbo.r_output_regressed_statistics pr
+		ON pl.nfl_id = pr.nfl_player_id
+		AND pr.season IN (2016,2017,2018,2019)
+		AND pr.season_type_adjusted = 'REGPOST'
+		AND pr.statistic_id = 7
+		AND pr.rolling_game_stats = 0
+	LEFT JOIN Analytics.dbo.r_output_regressed_statistics et
+		ON pr.nfl_player_id = et.nfl_player_id
+		AND pr.season = et.season
+		AND pr.season_type_adjusted = et.season_type_adjusted
+		AND et.statistic_id = 1
+		AND et.rolling_game_stats = 0
+	LEFT JOIN Analytics.dbo.r_output_regressed_statistics sr
+		ON pr.nfl_player_id = sr.nfl_player_id
+		AND pr.season = sr.season
+		AND pr.season_type_adjusted = sr.season_type_adjusted
+		AND sr.statistic_id = 6
+		AND sr.rolling_game_stats = 0
+	LEFT JOIN Analytics.dbo.r_output_regressed_statistics rd
+		ON pr.nfl_player_id = rd.nfl_player_id
+		AND pr.season = rd.season
+		AND pr.season_type_adjusted = rd.season_type_adjusted
+		AND rd.statistic_id = 14
+		AND rd.rolling_game_stats = 0
+	LEFT JOIN Analytics.dbo.r_input_stats_pass_rush ri
+		ON pr.nfl_player_id = ri.nfl_player_id
+		AND pr.season = ri.season
+		AND pr.season_type_adjusted = ri.season_type_adjusted
+		AND ri.rolling_game_stats = 0
+	LEFT JOIN #temp_unblocked un
+		ON pr.nfl_player_id = un.nfl_player_id
+		AND pr.season = un.season
+		AND pr.season_type_adjusted = un.season_type_adjusted
+	LEFT JOIN [AnalyticsWork].[dbo].[_ngs_pressure_stats] ngs
+		ON pr.nfl_player_id = ngs.nfl_player_id
+		AND pr.season = ngs.season
+		AND unblocked = 0
+	LEFT JOIN AnalyticsWork.dbo._prwr wi
+		ON pr.nfl_player_id = wi.nfl_player_id
+	WHERE pl.is_deleted = 0
+	ORDER BY qb_sack_sum DESC
+	
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the averages
+
+OUTPUT TABLES:
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	SELECT position_group_blt
+		,season
+		,SUM(qb_hit_sum) AS qb_hits
+		,SUM(qb_pressure_sum) AS qb_pressures
+		,SUM(qb_sack_sum) AS qb_hits
+		,SUM(qb_sack_sum) / CAST(SUM(qb_hit_sum) AS FLOAT) AS sack_to_hit_rate
+		,SUM(qb_sack_sum) / CAST(SUM(qb_pressure_sum) AS FLOAT) AS sack_to_pressure_rate
+	FROM #temp_stats_by_season
+	GROUP BY position_group_blt
+		,season
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the free agents table
+
+OUTPUT TABLES:
+#temp_stats_by_season
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	SELECT s19.player
+		,s19.team
+		,CASE WHEN fa.Comment LIKE '%void%' AND fa.Comment LIKE '%auto%' THEN 'Void'
+			WHEN fa.Comment LIKE '%void%' THEN 'Void*'
+			WHEN fa.Comment LIKE '%option%' THEN 'Option'
+			ELSE fa.CalculatedFreeAgentType
+		END AS free_agent_type
+		,co.true_average_per_year / 1000000 AS true_average_per_year
+		,co.true_apy_percent_of_cap
+		,s19.position_blt
+		--,s19.position_group_blt
+		,s19.disruption_display AS disruption_display_19
+		,s19.disruption_grade AS disruption_grade_19
+		,s19.tackle_display AS tackle_display_19
+		,s19.tackle_grade AS tackle_grade_19
+		,s19.stop_display AS stop_display_19
+		,s19.stop_grade AS stop_grade_19
+		,s19.run_display AS run_display_19
+		,s19.run_grade AS run_grade_19
+		,s18.disruption_display AS disruption_display_18
+		,s18.disruption_grade AS disruption_grade_18
+		,s18.tackle_display AS tackle_display_18
+		,s18.tackle_grade AS tackle_grade_18
+		,s18.stop_display AS stop_display_18
+		,s18.stop_grade AS stop_grade_18
+		,s18.run_display AS run_display_18
+		,s18.run_grade AS run_grade_18
+		,((ISNULL(s19.disruption_percentile,0) * 0.75 + ISNULL(s18.disruption_percentile,0)*.25) * .9 + (ISNULL(s19.tackle_percentile,0) * 0.75 + ISNULL(s18.tackle_percentile,0)*.25) * .1 ) * 100 AS weighted_score
+		/*,s19.disruption_value AS disruption_value_19
+		,s19.disruption_percentile AS disruption_percentile_19
+		,s18.disruption_value AS disruption_value_18
+		,s18.disruption_percentile AS disruption_percentile_18
+		,s19.tackle_value AS tackle_value_19	
+		,s19.tackle_percentile AS tackle_percentile_19
+		,s18.tackle_value AS tackle_value_18
+		,s18.tackle_percentile AS tackle_percentile_18
+		,s19.stop_value AS stop_value_19	
+		,s19.stop_percentile AS stop_percentile_19
+		,s18.stop_value AS stop_value_18
+		,s18.stop_percentile AS stop_percentile_18
+		,s19.run_value AS run_value_19
+		,s19.run_percentile AS run_percentile_19
+		,s18.run_value AS run_value_18
+		,s18.run_percentile AS run_percentile_18*/
+		,s19.qb_hit_sum AS qb_hit_sum_19
+		,s19.qb_pressure_sum AS qb_pressure_sum_sum_19
+		,s19.qb_sack_sum AS qb_sack_sum_19
+		,s19.qb_pressure_sum_unblocked AS qb_pressure_sum_unblocked_19
+		,s19.unblocked_pressure_pct AS unblocked_pressure_pct_19
+		,s18.qb_hit_sum AS qb_hit_sum_18
+		,s18.qb_pressure_sum AS qb_pressure_sum_sum_18
+		,s18.qb_sack_sum AS qb_sack_sum_18
+		,s18.qb_pressure_sum_unblocked AS qb_pressure_sum_unblocked_18
+		,s18.unblocked_pressure_pct AS unblocked_pressure_pct_18
+		,s19.sack_to_hit_rate AS sack_to_hit_rate_19
+		,s19.sack_to_pressure_rate AS sack_to_pressure_rate_19
+		,s18.sack_to_hit_rate AS sack_to_hit_rate_18
+		,s18.sack_to_pressure_rate AS sack_to_pressure_rate_18
+		,s17.sack_to_hit_rate AS sack_to_hit_rate_17
+		,s17.sack_to_pressure_rate AS sack_to_pressure_rate_17
+		,s16.sack_to_hit_rate AS sack_to_hit_rate_16
+		,s16.sack_to_pressure_rate AS sack_to_pressure_rate_16
+		,s19.[pressure_per_play_25] AS pressure_per_play_25_sum_19
+		,s19.[pressure_per_play_30] AS pressure_per_play_30_sum_19
+		,s19.[pressure_per_play_full] AS pressure_per_play_full_sum_19
+		,s19.[peak_pressure_25] AS peak_pressure_25_sum_19
+		,s19.[peak_pressure_30] AS peak_pressure_30_sum_19
+		,s19.[peak_pressure_full] AS peak_pressure_full_sum_19
+		,s19.[pass_rush_win_rate]
+		,s19.[pass_rush_wins_vs_double_teams]
+		,s19.[pass_rush_vs_double_teams_w_l]
+		,s19.[pass_rush_win_rate_vs_double_team]
+		,s19.[pass_rush_vs_double_teams]
+		,s19.[pass_rush_vs_double_team_rate]
+		,s19.[pass_rush_wins_single_team]
+		,s19.[pass_rush_vs_single_team]
+		,s19.[pass_rush_win_rate_single_team]
+		/*,s18.[pressure_per_play_25] AS pressure_per_play_25_sum_18
+		,s18.[pressure_per_play_30] AS pressure_per_play_30_sum_18
+		,s18.[pressure_per_play_full] AS pressure_per_play_full_sum_18
+		,s18.[peak_pressure_25] AS peak_pressure_25_sum_18
+		,s18.[peak_pressure_30] AS peak_pressure_30_sum_18
+		,s18.[peak_pressure_full] AS peak_pressure_full_sum_18*/
+	--INTO #temp_stats_by_season
+	FROM #temp_stats_by_season s19
+	LEFT JOIN #temp_stats_by_season s18
+		ON s19.nfl_player_id = s18.nfl_player_id
+		AND s18.season = 2018
+	LEFT JOIN #temp_stats_by_season s17
+		ON s19.nfl_player_id = s17.nfl_player_id
+		AND s17.season = 2017
+	LEFT JOIN #temp_stats_by_season s16
+		ON s19.nfl_player_id = s16.nfl_player_id
+		AND s16.season = 2016
+	LEFT JOIN ClubDB.dbo.PotentialFreeAgents fa
+		ON s19.nfl_player_id = fa.PlayerID
+		AND FreeAgentSeason = 2020
+	LEFT JOIN Analytics.dbo.analysis_players_contracts_NEW co
+		ON s19.nfl_player_id = co.nfl_player_id
+		AND co.effective_contract = 1
+	WHERE s19.season = 2019
+		AND s19.position_group_blt = 'edge'
