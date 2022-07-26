@@ -1,0 +1,282 @@
+
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create the week 1 roster table.
+
+OUTPUT TABLES:
+#temp_rosters
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_rosters exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_rosters') IS NOT NULL
+	DROP TABLE #temp_rosters
+
+	SELECT nfl_player_id
+		,club_id AS nfl_club_id
+		,gs.season
+		,regular_season_start
+	INTO #temp_rosters
+	FROM Analytics.dbo.analysis_players_gameweek_status gs
+	INNER JOIN Analytics.dbo.map_nfl_league_year_dates ly
+		ON gs.season = ly.season
+	WHERE 1=1
+		AND gs.status_roster_simple IN ('ACTIVE','INACTIVE')
+		AND gs.season_type = 'reg'
+		AND gs.[week] = 1	
+		AND gs.season >= 2013
+
+	INSERT INTO #temp_rosters
+	SELECT nfl_id AS nfl_player_id
+		,cl.nfl_club_id
+		,2020 AS season
+		,GETDATE() AS regular_season_start
+	FROM BaneProductionAnalytics.dbo.players pl
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON pl.current_club_id = cl.id
+		AND cl.is_disabled = 0
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Add nfl_club_ids to the Transaction Table. Only include relevant transactions.
+
+OUTPUT TABLES:
+#temp_transaction_table
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_transaction_table exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_transaction_table') IS NOT NULL
+	DROP TABLE #temp_transaction_table
+
+	SELECT tt.transid
+		,PlayerID AS nfl_player_id
+		,Transactiondate
+		,Season AS season
+		,InitialTransStatusShortDesc
+		,ResultTransStatusShortDesc
+		,CASE WHEN TransactionDescAbbr = 'FA01' AND InitialTransStatusShortDesc = 'F09' THEN 'Signed from PS'
+			WHEN TransactionDescAbbr = 'FA01' AND OrderBy = 1 THEN 'UDFA Signing'
+			WHEN TransactionDescAbbr = 'FS04' THEN 'RFA Signing'
+			WHEN TransactionDescAbbr = 'FA02' THEN 'UFA Signing'
+			WHEN TransactionDescAbbr = 'FA01' THEN 'FA Signing'
+			WHEN TransactionDescAbbr = 'SS01' THEN 'Draft Pick'
+			WHEN TransactionDescAbbr = 'AW01' THEN 'Waivers'
+			WHEN TransactionDescAbbr = 'TR01' THEN 'Trade'
+			WHEN TransactionDescAbbr = 'RE17' THEN 'Futures Signing'
+			WHEN TransactionDescAbbr IN ('PS01','PS08') THEN 'Practice Squad'
+			ELSE TransactionDesc
+		END AS transaction_desc
+		,TransactionDescAbbr
+		,StartClubFullName
+		,StartClubAbbr
+		,ResultClubFullName
+		,ResultClubAbbr
+		,rcl.[name] AS result_club_name
+		,rcl.code AS result_club_code
+		,rcl.nfl_club_id AS result_nfl_club_id
+		,PotentialClubFullName
+		,PotentialClubAbbr
+		,OrderBy AS order_by
+	INTO #temp_transaction_table
+	FROM ProDB.dbo.TransactionTable tt
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs rcl
+		ON CASE WHEN tt.ResultClubFullName = 'St. Louis Rams' THEN 'Los Angeles Rams'
+				WHEN tt.ResultClubFullName = 'San Diego Chargers' THEN 'Los Angeles Chargers'
+				WHEN tt.ResultClubFullName = 'Oakland Raiders' THEN 'Las Vegas Raiders'
+				ELSE tt.ResultClubFullName END  = rcl.[name]
+		AND rcl.is_disabled = 0
+	WHERE Season >= 1990
+		AND LeagueType = 'NFL'
+		AND TransactionDescAbbr IN ('FA01','FA02','PS01','PS08','AW01','TR01','SS01','FS04','RE17') --'f09'
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Add a lag variable so you can see if the player changes team in a transaction.
+
+OUTPUT TABLES:
+#temp_transaction_table_with_lag
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_transaction_table_with_lag exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_transaction_table_with_lag') IS NOT NULL
+	DROP TABLE #temp_transaction_table_with_lag
+
+	SELECT *
+		,CASE WHEN result_nfl_club_id <> LAG(result_nfl_club_id,1) OVER (PARTITION BY nfl_player_id ORDER BY order_by) THEN 1 ELSE 0 END AS different_result_club
+	INTO #temp_transaction_table_with_lag
+	FROM #temp_transaction_table
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the roster to the transactions.  Only transactions that occured before that season so you know how a player got to that team at that point.
+
+OUTPUT TABLES:
+#temp_roster_with_tt
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_roster_with_tt exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_roster_with_tt') IS NOT NULL
+	DROP TABLE #temp_roster_with_tt
+
+	SELECT ro.*
+		,tt.transaction_desc
+		,tt.TransactionDescAbbr
+		,tt.Transactiondate
+		,tt.order_by
+		,different_result_club
+	INTO #temp_roster_with_tt
+	FROM #temp_rosters ro
+	INNER JOIN #temp_transaction_table_with_lag tt
+		ON ro.nfl_player_id = tt.nfl_player_id
+		AND ro.nfl_club_id = tt.result_nfl_club_id
+	ORDER BY nfl_player_id
+		,tt.Transactiondate
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Sum up the lagged values to see if a player changed teams in the trasnactions leading up to this season.  You have to do it here rather than earlier cause you only want
+to know if it happened UP TO THIS POINT in his transaction history.  If a player has changed teams, you want the most recent transaction.  If he hasn't changed teams, 
+you want the earliest transaction.
+
+#temp_roster_with_tt_order
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+	
+-- Check if #temp_team_change exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_team_change') IS NOT NULL
+	DROP TABLE #temp_team_change
+
+	SELECT nfl_player_id
+		,season
+		,SUM(different_result_club) AS team_change_sum
+	INTO #temp_team_change
+	FROM #temp_roster_with_tt
+	GROUP BY nfl_player_id
+		,season
+
+
+-- Check if #temp_roster_with_tt_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_roster_with_tt_order') IS NOT NULL
+	DROP TABLE #temp_roster_with_tt_order
+
+	SELECT ro.*
+		,tc.team_change_sum
+		,CASE WHEN tc.team_change_sum > 0 THEN RANK() OVER (PARTITION BY ro.nfl_player_id, ro.season ORDER BY ro.TransactionDate DESC, ro.order_by DESC) 
+			ELSE RANK() OVER (PARTITION BY ro.nfl_player_id, ro.season ORDER BY ro.TransactionDate, ro.order_by) 
+		END AS transaction_with_club_order
+	INTO #temp_roster_with_tt_order
+	FROM #temp_roster_with_tt ro
+	INNER JOIN #temp_team_change tc
+		ON ro.nfl_player_id = tc.nfl_player_id
+		AND ro.season = tc.season
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Add the display data.  First query is for previous seasons, second is for current rosters (if you run it in offseason).
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+	SELECT season
+		,cl.code AS team
+		,po.translation AS Position
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS Player
+		,sc.code AS College
+		,tt.transaction_desc AS how_acquired
+		,draft_year AS Draft
+		,CASE WHEN draft_round IS NULL THEN 'UDFA' ELSE CAST(draft_round AS VARCHAR(4)) END AS [Round]
+		,ec.code AS draft_team
+		,st.description_short
+	FROM #temp_roster_with_tt_order tt
+	INNER JOIN [BaneProductionAnalytics].dbo.players pl
+		ON tt.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	LEFT JOIN [BaneProductionAnalytics].dbo.schools sc
+		ON pl.ncaa_club_id = sc.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.measurable_summaries ms
+		ON pl.id = ms.player_id
+	LEFT JOIN [BaneProductionAnalytics].dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN [BaneProductionAnalytics].dbo.clubs cl
+		ON tt.nfl_club_id = cl.nfl_club_id
+		AND cl.is_disabled = 0
+	LEFT JOIN [BaneProductionAnalytics].dbo.clubs ec
+		ON pl.nfl_entry_club_id = ec.id
+		AND ec.is_disabled = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.statuses st
+		ON pl.status_id = st.id
+	WHERE 1=1
+		AND tt.transaction_with_club_order = 1
+		AND season = 2020
+
+
+	/*
+
+	SELECT nfl_club_id
+		,season
+		,COUNT(*)
+	FROM #temp_rosters
+	GROUP BY nfl_club_id
+		,season
+	ORDER BY nfl_club_id
+		,season
+
+
+	SELECT nfl_club_id
+		,season
+		,COUNT(*)
+	FROM #temp_roster_with_tt_order
+	WHERE transaction_with_club_order = 1
+	GROUP BY nfl_club_id
+		,season
+	ORDER BY nfl_club_id
+		,season
+
+
+	SELECT pl.last_name
+		,pl.goes_by
+		,po.translation
+		,gs.status_roster_simple
+		,nfl_player_id
+	FROM Analytics.dbo.analysis_players_gameweek_status gs
+	INNER JOIN BaneProductionAnalytics.dbo.players pl	
+		ON gs.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = pl.id
+	WHERE gs.season_type = 'reg'
+		AND gs.season = 2017
+		AND gs.[week]=1
+		AND gs.club_id = 12
+		AND status_roster_simple IN ('ACTIVE','INACTIVE')
+	ORDER BY pl.last_name
+
+
+	SELECT *
+	FROM ClubDB.dbo.GameRoster
+	WHERE Gamekey = 57234
+	and ClubID = 12
+
+
+	select *
+	from ClubDB.dbo.Game
+	where season = 2017
+	and [week] = 1
+	and Season_Type = 'reg'
+
+
+	select *
+	from baneproductionanalytics.dbo.clubs
+	where is_disabled = 0
+
+	*/
+
