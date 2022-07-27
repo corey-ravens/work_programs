@@ -6,7 +6,36 @@
 This program is for looking at WR groups in the nfl, to see if it is "better" to sign one high
 priced FA WR or a couple lower priced ones.
 
+v3 adds weighted average grades for rb, fb, and ol
+v4 adds grade counts for rb, fb, and ol
+
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the actual and model pct of cap values for each player season.
+
+OUTPUT TABLES:
+#temp_pct_of_cap
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_pct_of_cap exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pct_of_cap') IS NOT NULL
+	DROP TABLE #temp_pct_of_cap
+	
+	SELECT nfl_player_id
+		,season
+		,model
+		,salaries
+		,[value]
+		,[source]
+		,signing_type
+		,sign_date
+	INTO #temp_pct_of_cap
+	FROM [AnalyticsWork].[dbo].[rd2_salaries_for_modeling]
+	WHERE report_week = 17 
+		AND report_season = 2017
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -383,8 +412,8 @@ IF OBJECT_ID('tempdb..#temp_distinct_player_grades') IS NOT NULL
 		AND pl.is_deleted = 0
 	LEFT JOIN BaneProductionAnalytics.dbo.positions po
 		ON pl.position_id = po.id
-	WHERE (poff.position_blt IN ('TE','WR') OR translation IN ('TE','WR'))
-		AND translation NOT IN ('OT','OG','OC')
+	--WHERE (poff.position_blt IN ('TE','WR') OR translation IN ('TE','WR'))
+		--AND translation NOT IN ('OT','OG','OC')
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -459,6 +488,122 @@ IF OBJECT_ID('tempdb..#temp_pass_catcher_counts') IS NOT NULL
 		,SUM(CASE WHEN pro_grade_current >= 6.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_60up_current_te
 		,SUM(CASE WHEN pro_grade_current >= 5.9 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_59up_current_te
 		,SUM(CASE WHEN pro_grade_current >= 5.8 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_58up_current_te
+
+		,SUM(CASE WHEN pro_grade_previous = 8.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_80_previous_qb
+		,SUM(CASE WHEN pro_grade_previous = 7.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_70_previous_qb
+		,SUM(CASE WHEN pro_grade_previous IN (6.9) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_69_previous_qb
+		,SUM(CASE WHEN pro_grade_previous IN (6.7,6.5) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_67_previous_qb
+		,SUM(CASE WHEN pro_grade_previous IN (6.4,6.3,6.2) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_63_previous_qb
+		,SUM(CASE WHEN pro_grade_previous IN (6.1,6.0) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_60_previous_qb
+		,SUM(CASE WHEN pro_grade_previous IN (5.9) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_59_previous_qb
+		,SUM(CASE WHEN pro_grade_previous IN (5.8) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_58_previous_qb
+		,SUM(CASE WHEN pro_grade_previous >= 7.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_70up_previous_qb
+		,SUM(CASE WHEN pro_grade_previous >= 6.5 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_69up_previous_qb
+		,SUM(CASE WHEN pro_grade_previous >= 6.2 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_63up_previous_qb
+		,SUM(CASE WHEN pro_grade_previous >= 6.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_60up_previous_qb
+		,SUM(CASE WHEN pro_grade_previous >= 5.9 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_59up_previous_qb
+		,SUM(CASE WHEN pro_grade_previous >= 5.8 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_58up_previous_qb
+		,SUM(CASE WHEN pro_grade_current = 8.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_80_current_qb
+		,SUM(CASE WHEN pro_grade_current = 7.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_70_current_qb
+		,SUM(CASE WHEN pro_grade_current IN (6.9) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_69_current_qb
+		,SUM(CASE WHEN pro_grade_current IN (6.7,6.5) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_67_current_qb
+		,SUM(CASE WHEN pro_grade_current IN (6.4,6.3,6.2) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_63_current_qb
+		,SUM(CASE WHEN pro_grade_current IN (6.1,6.0) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_60_current_qb
+		,SUM(CASE WHEN pro_grade_current IN (5.9) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_59_current_qb
+		,SUM(CASE WHEN pro_grade_current IN (5.8) AND position IN ('QB') THEN 1 ELSE 0 END) AS count_58_current_qb
+		,SUM(CASE WHEN pro_grade_current >= 7.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_70up_current_qb
+		,SUM(CASE WHEN pro_grade_current >= 6.5 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_69up_current_qb
+		,SUM(CASE WHEN pro_grade_current >= 6.2 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_63up_current_qb
+		,SUM(CASE WHEN pro_grade_current >= 6.0 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_60up_current_qb
+		,SUM(CASE WHEN pro_grade_current >= 5.9 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_59up_current_qb
+		,SUM(CASE WHEN pro_grade_current >= 5.8 AND position IN ('QB') THEN 1 ELSE 0 END) AS count_58up_current_qb
+
+		,SUM(CASE WHEN pro_grade_previous = 8.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_80_previous_fb
+		,SUM(CASE WHEN pro_grade_previous = 7.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_70_previous_fb
+		,SUM(CASE WHEN pro_grade_previous IN (6.9) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_69_previous_fb
+		,SUM(CASE WHEN pro_grade_previous IN (6.7,6.5) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_67_previous_fb
+		,SUM(CASE WHEN pro_grade_previous IN (6.4,6.3,6.2) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_63_previous_fb
+		,SUM(CASE WHEN pro_grade_previous IN (6.1,6.0) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_60_previous_fb
+		,SUM(CASE WHEN pro_grade_previous IN (5.9) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_59_previous_fb
+		,SUM(CASE WHEN pro_grade_previous IN (5.8) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_58_previous_fb
+		,SUM(CASE WHEN pro_grade_previous >= 7.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_70up_previous_fb
+		,SUM(CASE WHEN pro_grade_previous >= 6.5 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_69up_previous_fb
+		,SUM(CASE WHEN pro_grade_previous >= 6.2 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_63up_previous_fb
+		,SUM(CASE WHEN pro_grade_previous >= 6.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_60up_previous_fb
+		,SUM(CASE WHEN pro_grade_previous >= 5.9 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_59up_previous_fb
+		,SUM(CASE WHEN pro_grade_previous >= 5.8 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_58up_previous_fb
+		,SUM(CASE WHEN pro_grade_current = 8.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_80_current_fb
+		,SUM(CASE WHEN pro_grade_current = 7.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_70_current_fb
+		,SUM(CASE WHEN pro_grade_current IN (6.9) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_69_current_fb
+		,SUM(CASE WHEN pro_grade_current IN (6.7,6.5) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_67_current_fb
+		,SUM(CASE WHEN pro_grade_current IN (6.4,6.3,6.2) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_63_current_fb
+		,SUM(CASE WHEN pro_grade_current IN (6.1,6.0) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_60_current_fb
+		,SUM(CASE WHEN pro_grade_current IN (5.9) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_59_current_fb
+		,SUM(CASE WHEN pro_grade_current IN (5.8) AND position IN ('FB') THEN 1 ELSE 0 END) AS count_58_current_fb
+		,SUM(CASE WHEN pro_grade_current >= 7.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_70up_current_fb
+		,SUM(CASE WHEN pro_grade_current >= 6.5 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_69up_current_fb
+		,SUM(CASE WHEN pro_grade_current >= 6.2 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_63up_current_fb
+		,SUM(CASE WHEN pro_grade_current >= 6.0 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_60up_current_fb
+		,SUM(CASE WHEN pro_grade_current >= 5.9 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_59up_current_fb
+		,SUM(CASE WHEN pro_grade_current >= 5.8 AND position IN ('FB') THEN 1 ELSE 0 END) AS count_58up_current_fb
+
+		,SUM(CASE WHEN pro_grade_previous = 8.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_80_previous_rb
+		,SUM(CASE WHEN pro_grade_previous = 7.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_70_previous_rb
+		,SUM(CASE WHEN pro_grade_previous IN (6.9) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_69_previous_rb
+		,SUM(CASE WHEN pro_grade_previous IN (6.7,6.5) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_67_previous_rb
+		,SUM(CASE WHEN pro_grade_previous IN (6.4,6.3,6.2) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_63_previous_rb
+		,SUM(CASE WHEN pro_grade_previous IN (6.1,6.0) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_60_previous_rb
+		,SUM(CASE WHEN pro_grade_previous IN (5.9) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_59_previous_rb
+		,SUM(CASE WHEN pro_grade_previous IN (5.8) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_58_previous_rb
+		,SUM(CASE WHEN pro_grade_previous >= 7.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_70up_previous_rb
+		,SUM(CASE WHEN pro_grade_previous >= 6.5 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_69up_previous_rb
+		,SUM(CASE WHEN pro_grade_previous >= 6.2 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_63up_previous_rb
+		,SUM(CASE WHEN pro_grade_previous >= 6.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_60up_previous_rb
+		,SUM(CASE WHEN pro_grade_previous >= 5.9 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_59up_previous_rb
+		,SUM(CASE WHEN pro_grade_previous >= 5.8 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_58up_previous_rb
+		,SUM(CASE WHEN pro_grade_current = 8.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_80_current_rb
+		,SUM(CASE WHEN pro_grade_current = 7.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_70_current_rb
+		,SUM(CASE WHEN pro_grade_current IN (6.9) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_69_current_rb
+		,SUM(CASE WHEN pro_grade_current IN (6.7,6.5) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_67_current_rb
+		,SUM(CASE WHEN pro_grade_current IN (6.4,6.3,6.2) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_63_current_rb
+		,SUM(CASE WHEN pro_grade_current IN (6.1,6.0) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_60_current_rb
+		,SUM(CASE WHEN pro_grade_current IN (5.9) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_59_current_rb
+		,SUM(CASE WHEN pro_grade_current IN (5.8) AND position IN ('RB') THEN 1 ELSE 0 END) AS count_58_current_rb
+		,SUM(CASE WHEN pro_grade_current >= 7.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_70up_current_rb
+		,SUM(CASE WHEN pro_grade_current >= 6.5 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_69up_current_rb
+		,SUM(CASE WHEN pro_grade_current >= 6.2 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_63up_current_rb
+		,SUM(CASE WHEN pro_grade_current >= 6.0 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_60up_current_rb
+		,SUM(CASE WHEN pro_grade_current >= 5.9 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_59up_current_rb
+		,SUM(CASE WHEN pro_grade_current >= 5.8 AND position IN ('RB') THEN 1 ELSE 0 END) AS count_58up_current_rb
+
+		,SUM(CASE WHEN pro_grade_previous = 8.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_80_previous_ol
+		,SUM(CASE WHEN pro_grade_previous = 7.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_70_previous_ol
+		,SUM(CASE WHEN pro_grade_previous IN (6.9) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_69_previous_ol
+		,SUM(CASE WHEN pro_grade_previous IN (6.7,6.5) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_67_previous_ol
+		,SUM(CASE WHEN pro_grade_previous IN (6.4,6.3,6.2) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_63_previous_ol
+		,SUM(CASE WHEN pro_grade_previous IN (6.1,6.0) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_60_previous_ol
+		,SUM(CASE WHEN pro_grade_previous IN (5.9) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_59_previous_ol
+		,SUM(CASE WHEN pro_grade_previous IN (5.8) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_58_previous_ol
+		,SUM(CASE WHEN pro_grade_previous >= 7.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_70up_previous_ol
+		,SUM(CASE WHEN pro_grade_previous >= 6.5 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_69up_previous_ol
+		,SUM(CASE WHEN pro_grade_previous >= 6.2 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_63up_previous_ol
+		,SUM(CASE WHEN pro_grade_previous >= 6.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_60up_previous_ol
+		,SUM(CASE WHEN pro_grade_previous >= 5.9 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_59up_previous_ol
+		,SUM(CASE WHEN pro_grade_previous >= 5.8 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_58up_previous_ol
+		,SUM(CASE WHEN pro_grade_current = 8.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_80_current_ol
+		,SUM(CASE WHEN pro_grade_current = 7.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_70_current_ol
+		,SUM(CASE WHEN pro_grade_current IN (6.9) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_69_current_ol
+		,SUM(CASE WHEN pro_grade_current IN (6.7,6.5) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_67_current_ol
+		,SUM(CASE WHEN pro_grade_current IN (6.4,6.3,6.2) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_63_current_ol
+		,SUM(CASE WHEN pro_grade_current IN (6.1,6.0) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_60_current_ol
+		,SUM(CASE WHEN pro_grade_current IN (5.9) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_59_current_ol
+		,SUM(CASE WHEN pro_grade_current IN (5.8) AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_58_current_ol
+		,SUM(CASE WHEN pro_grade_current >= 7.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_70up_current_ol
+		,SUM(CASE WHEN pro_grade_current >= 6.5 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_69up_current_ol
+		,SUM(CASE WHEN pro_grade_current >= 6.2 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_63up_current_ol
+		,SUM(CASE WHEN pro_grade_current >= 6.0 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_60up_current_ol
+		,SUM(CASE WHEN pro_grade_current >= 5.9 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_59up_current_ol
+		,SUM(CASE WHEN pro_grade_current >= 5.8 AND position IN ('LOT','LOG','OC','ROG','ROT') THEN 1 ELSE 0 END) AS count_58up_current_ol
 	INTO #temp_pass_catcher_counts
 	FROM #temp_distinct_player_grades
 	GROUP BY nfl_club_id
