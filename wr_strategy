@@ -248,6 +248,28 @@ IF OBJECT_ID('tempdb..#temp_player_expected_grade') IS NOT NULL
 		ON db.legacy_grade = xg.legacy_grade
 		AND db.position = xg.position
 
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the season to the offensive alignment table
+
+OUTPUT TABLES:
+#temp_plays_player_offensive_alignment
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_plays_player_offensive_alignment exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_plays_player_offensive_alignment') IS NOT NULL
+	DROP TABLE #temp_plays_player_offensive_alignment
+
+	SELECT oa.*
+		,an.season
+	INTO #temp_plays_player_offensive_alignment
+	FROM Analytics.dbo.stage_plays_player_offensive_alignment oa
+	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
+		ON oa.pff_play_id = an.pff_play_id
+	WHERE season >= 2012
+		AND season_type_adjusted = 'REGPOST'
+
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -269,38 +291,49 @@ IF OBJECT_ID('tempdb..#temp_players_snaps_with_grades') IS NOT NULL
 			ELSE position_blt
 		END AS position_blt
 		,oa.pff_play_id
-		,an.season
+		,oa.season
 		,cl.nfl_club_id
 		,CASE WHEN oa.team = 'SD' THEN 'LAC' WHEN oa.team = 'SL' THEN 'LA' ELSE oa.team END AS club
-		,CASE WHEN pl.nfl_entry_year = an.season THEN CASE WHEN expected_pro_grade_bucket < 5.7  THEN 5.7 ELSE ISNULL(expected_pro_grade_bucket,5.7) END	
+		,CASE WHEN pl.nfl_entry_year = oa.season THEN CASE WHEN expected_pro_grade_bucket < 5.7  THEN 5.7 ELSE ISNULL(expected_pro_grade_bucket,5.7) END	
 			WHEN pgp.grade_bucket IS NULL THEN CASE WHEN pgp2.grade_bucket < 5.7 THEN 5.7 ELSE ISNULL(pgp2.grade_bucket,5.7) END 
 			ELSE CASE WHEN pgp.grade_bucket < 5.7 THEN 5.7 ELSE ISNULL(pgp.grade_bucket,5.7) END
 		END AS pro_grade_previous
 		,CASE WHEN pgc.grade_bucket < 5.7 THEN 5.7
 			ELSE ISNULL(pgc.grade_bucket,5.7)
 		END AS pro_grade_current
+		,CASE WHEN capp.salaries IS NULL THEN ISNULL(cap2.salaries,0)
+			ELSE capp.salaries
+		END AS pct_of_cap_previous
+		,CASE WHEN capc.salaries IS NULL THEN ISNULL(capp.salaries,0)
+			ELSE capc.salaries
+		END AS pct_of_cap_current
 	INTO #temp_players_snaps_with_grades
-	FROM Analytics.dbo.stage_plays_player_offensive_alignment oa
-	INNER JOIN Analytics.dbo.stage_plays_play_ancillary an
-		ON oa.pff_play_id = an.pff_play_id
+	FROM #temp_plays_player_offensive_alignment oa
 	INNER JOIN BaneProductionAnalytics.dbo.players pl
 		ON oa.nfl_player_id = pl.nfl_id	
 		AND pl.is_deleted = 0
 	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgp
 		ON oa.nfl_player_id = pgp.nfl_player_id
-		AND an.season = pgp.report_season + 1
+		AND oa.season = pgp.report_season + 1
 	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgc
 		ON oa.nfl_player_id = pgc.nfl_player_id
-		AND an.season = pgc.report_season
+		AND oa.season = pgc.report_season
 	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgp2
 		ON oa.nfl_player_id = pgp2.nfl_player_id
-		AND an.season = pgp2.report_season + 2
+		AND oa.season = pgp2.report_season + 2
+	LEFT JOIN #temp_pct_of_cap capp
+		ON oa.nfl_player_id = capp.nfl_player_id
+		AND oa.season = capp.season + 1
+	LEFT JOIN #temp_pct_of_cap capc
+		ON oa.nfl_player_id = capc.nfl_player_id
+		AND oa.season = capc.season
+	LEFT JOIN #temp_pct_of_cap cap2
+		ON oa.nfl_player_id = cap2.nfl_player_id
+		AND oa.season = cap2.season + 2
 	LEFT JOIN #temp_player_expected_grade db
 		ON pl.id = db.bane_player_id
 	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
 		ON CASE WHEN oa.team = 'SD' THEN 'LAC' WHEN oa.team = 'SL' THEN 'LA' ELSE oa.team END = cl.code
-	WHERE season >= 2012
-		AND season_type_adjusted = 'REGPOST'
 
 
 /*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -401,6 +434,8 @@ IF OBJECT_ID('tempdb..#temp_distinct_player_grades') IS NOT NULL
 		,sg.club
 		,pro_grade_previous
 		,pro_grade_current
+		,pct_of_cap_previous
+		,pct_of_cap_current
 	INTO #temp_distinct_player_grades
 	FROM #temp_players_snaps_with_grades sg
 	LEFT JOIN Analytics.dbo.analysis_players_season_position_offense poff
