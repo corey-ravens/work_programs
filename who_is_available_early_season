@@ -1,0 +1,368 @@
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Adjust the week variable so you can order by week and account for 
+season type
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_analysis_players_gameweek_status, if it does drop it
+IF OBJECT_ID('tempdb..##temp_analysis_players_gameweek_status') IS NOT NULL
+	DROP TABLE ##temp_analysis_players_gameweek_status
+
+SELECT *
+	  ,CASE WHEN UPPER(season_type) ='PRE' THEN [week] + 100
+	        WHEN UPPER(season_type) ='REG' THEN [week] + 200 
+			WHEN UPPER(season_type) ='POST' THEN [week] + 300
+	   END AS week_adjusted
+INTO ##temp_analysis_players_gameweek_status
+FROM [Analytics].[dbo].[analysis_players_gameweek_status]
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Add the next row status on to each row in the relevant seasons
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_signings, if it does drop it
+IF OBJECT_ID('tempdb..##temp_signings') IS NOT NULL
+	DROP TABLE ##temp_signings
+
+SELECT [nfl_player_id]
+      ,[season]
+	  ,[season_type]
+	  ,[week]
+	  ,week_adjusted
+      ,LEAD([week]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted]) AS [week_start]
+      --,[status_start_date]
+      --,[status_end_date]
+	  ,LEAD(status_end_date) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted])  AS status_end_date_next
+      ,[status_roster_simple]
+	  ,LEAD(status_roster_simple) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted])  AS status_roster_simple_next
+      --,[status_game_played]
+      --,[nfl_game_key]
+	  ,club_id
+      ,LEAD([club_id]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted])  AS [club_id_next]
+	  --,game_datetime
+	  --,LEAD([game_datetime]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted])  AS [game_datetime_next]
+	  --,nfl_game_key
+	  --,LEAD([nfl_game_key]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted])  AS [nfl_game_key_next]
+INTO ##temp_signings
+FROM ##temp_analysis_players_gameweek_status gs
+--where nfl_player_id=32215
+
+--select * from ##temp_signings where nfl_player_id=32215
+--select nfl_game_key, count(*) from ##temp_analysis_players_gameweek_status where club_id=20 and season=2013 and week_adjusted=201 group by nfl_game_key
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find all the signings and claims/trades in the first 4 weeks
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_in_season_signings, if it does drop it
+IF OBJECT_ID('tempdb..##temp_in_season_signings') IS NOT NULL
+	DROP TABLE ##temp_in_season_signings
+
+SELECT *
+INTO ##temp_in_season_signings
+FROM ##temp_signings
+WHERE ((status_roster_simple IN ('FREEAGENT') AND status_roster_simple_next IN ('ACTIVE','INACTIVE')) 
+        OR (status_roster_simple IN ('ACTIVE','INACTIVE','ACTIVEEXEMPT','EXEMPT','PRACTICESQUAD','PUP','INJURED','SUSPENDED') AND status_roster_simple_next IN ('ACTIVE','INACTIVE') AND (club_id <> club_id_next))
+	   )
+  AND season in (2013,2014,2015)
+  AND week_adjusted IN (105,201,202,203)
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the last row for each player for each team for each season
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_last_week, if it does drop it
+IF OBJECT_ID('tempdb..##temp_last_week') IS NOT NULL
+	DROP TABLE ##temp_last_week
+
+SELECT nfl_player_id
+      ,season
+	  ,season_type
+      ,[week] AS week_last
+	  ,club_id
+	  ,status_roster_simple
+	  --,status_roster_simple_next
+	  --,CASE WHEN status_roster_simple = 'PRACTICESQUAD' THEN nfl_game_key_next
+	   --ELSE nfl_game_key
+	   --END AS nfl_game_key
+	  --,game_datetime
+INTO ##temp_last_week
+FROM ##temp_signings s1
+WHERE s1.[week_adjusted] = (SELECT MAX([week_adjusted]) 
+				   FROM ##temp_signings s2 
+				   WHERE s2.nfl_player_id=s1.nfl_player_id 
+					 AND s2.season=s1.season
+					 AND s2.club_id=s1.club_id
+					 AND (s2.season_type='Reg')
+					 AND (s2.status_roster_simple IN ('ACTIVE','INACTIVE')) --OR (s2.status_roster_simple IN ('ACTIVE','INACTIVE') AND s2.status_roster_simple_next IN ('PRACTICESQUAD','INJURED')))
+					 )
+  AND s1.season >= 2013
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Combine the signing row with the last rows. 
+
+**Need to watch out for players who later return to the same team
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_sign_and_last, if it does drop it
+IF OBJECT_ID('tempdb..##temp_sign_and_last') IS NOT NULL
+	DROP TABLE ##temp_sign_and_last
+
+SELECT ins.*
+      ,week_last
+	  --,lw.nfl_game_key AS nfl_game_key_last
+INTO ##temp_sign_and_last
+FROM ##temp_in_season_signings ins
+LEFT JOIN ##temp_last_week lw
+ON ins.nfl_player_id=lw.nfl_player_id
+AND ins.season=lw.season
+AND ins.club_id_next=lw.club_id
+ORDER BY ins.nfl_player_id, ins.season, week_adjusted
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+If a player has more than one row with a team, put the start week of the second row on the first row.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_sign_and_last_one_team_row, if it does drop it
+IF OBJECT_ID('tempdb..##temp_sign_and_last_one_team_row') IS NOT NULL
+	DROP TABLE ##temp_sign_and_last_one_team_row
+
+SELECT nfl_player_id
+	  ,season
+	  ,week_adjusted
+	  ,week_start
+	  ,CASE WHEN LEAD([club_id_next]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted]) = club_id_next 
+				THEN LEAD([week_start]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted]) - 2
+				ELSE week_last
+	   END AS week_last	  
+	  --,nfl_game_key_next
+	  --,nfl_game_key_last
+	  ,CASE WHEN 
+			CASE WHEN LEAD([club_id_next]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted]) = club_id_next 
+				THEN LEAD([week_start]) OVER (PARTITION BY nfl_player_id, season ORDER BY [week_adjusted]) - 2
+				ELSE week_last END = 17 THEN 1 ELSE 0 
+	   END AS finished_season_on_roster
+	  ,status_roster_simple
+	  ,status_roster_simple_next
+	  ,club_id_next
+INTO ##temp_sign_and_last_one_team_row
+FROM  ##temp_sign_and_last
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get the pro grades for each player for each season
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_grades_scout exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_grades_scout') IS NOT NULL
+	DROP TABLE ##temp_grades_scout
+
+    SELECT DISTINCT re.id AS report_id
+	      ,gr.id
+	      ,CASE WHEN UPPER(re.[type]) IN ('ABILITY FOR RAVENS') THEN 1
+		        WHEN UPPER(re.[type]) IN ('GAME ADVANCE') THEN 1
+				WHEN UPPER(re.[type]) IN ('QUARTERLY') THEN 1
+				ELSE NULL
+		   END AS report_priority
+          ,author_id AS scout_id
+          ,nfl_id AS nfl_player_id
+		  ,CASE WHEN MONTH(re.created_at) < 8 OR (MONTH(re.created_at) = 8 AND DAY(re.created_at) < 16) THEN YEAR(re.created_at)-1 
+		        ELSE YEAR(re.created_at) END AS report_season
+		  ,re.position_id AS position_id
+		  ,CAST(gr.value AS FLOAT) AS grade_bucket    
+          ,CASE WHEN CAST(gr.value AS NUMERIC (3,1)) IN (8.0) THEN 100
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (7.0) THEN 84
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (6.9,6.7,6.5) THEN 73
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (6.3) THEN 65
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (6.1,6.0) THEN 58
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.9) THEN 53
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.8) THEN 50
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.7) THEN 47.5
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.6) THEN 46
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.4) THEN 45
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.2) THEN 44
+                WHEN CAST(gr.value AS NUMERIC (3,1)) IN (5.0) THEN 43
+                ELSE NULL
+           END AS grade_value   
+      INTO ##temp_grades_scout
+      FROM [BaneProductionAnalytics].[dbo].[reports] re
+ LEFT JOIN [BaneProductionAnalytics].[dbo].[grades] gr
+        ON re.grade_id=gr.id
+INNER JOIN [BaneProductionAnalytics].[dbo].[players] pl 
+        ON re.player_id = pl.id
+INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] tir 
+        ON tir.taggable_id = re.id 
+	   AND UPPER(tir.taggable_type)= 'REPORT'
+INNER JOIN [BaneProductionAnalytics].[dbo].[tags] tgr 
+        ON tir.tag_id = tgr.id
+	   AND UPPER(tgr.name) = 'PRO' 
+INNER JOIN [BaneProductionAnalytics].[dbo].[taggings] tiu 
+        ON tiu.taggable_id = re.author_id
+	   AND UPPER(tiu.taggable_type)= 'USER'
+INNER JOIN [BaneProductionAnalytics].[dbo].[tags] tgu 
+        ON tiu.tag_id = tgu.id
+	  AND UPPER(tgu.name) <> 'COACH'         
+     WHERE 1=1
+       AND re.is_deleted = 0
+       AND gr.scale_id IN (6)
+	   AND UPPER(re.[type]) <> 'SPECIAL TEAMS' 
+  ORDER BY re.id     
+          ,gr.id
+
+
+-- Check if ##temp_grades_scout_mean exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_grades_scout_mean') IS NOT NULL
+	DROP TABLE ##temp_grades_scout_mean
+
+    SELECT nfl_player_id
+          --,report_priority
+		  ,report_season AS season
+		  ,AVG(grade_value) AS grade_season       
+      INTO ##temp_grades_scout_mean
+	  FROM ##temp_grades_scout
+  GROUP BY nfl_player_id
+          --,report_priority
+		  ,report_season
+
+--SELECT distinct nfl_player_id, report_season from ##temp_grades_scout
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get the quant grades for each player for each season
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_quant_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_quant_grades') IS NOT NULL
+	DROP TABLE ##temp_quant_grades
+
+SELECT PlayerID as nfl_player_id
+      ,season
+	  ,age
+	  ,COALESCE(BothGradeFit,PFFGradeFit,MaddenGradeFit) as grade_season
+	  ,COALESCE(BothGrade,PFFGrade,MaddenGrade) as grade_season_bucket
+	  ,'DEF' as grade_side
+INTO ##temp_quant_grades
+FROM AnalyticsWork.dbo.quant_grades_defense
+WHERE Snaps >= 50
+AND PlayerID <> 25912
+
+INSERT INTO ##temp_quant_grades
+SELECT PlayerID as nfl_player_id
+      ,season
+	  ,age
+	  ,COALESCE(BothGradeFit,PFFGradeFit,MaddenGradeFit) as grade_season
+	  ,COALESCE(BothGrade,PFFGrade,MaddenGrade) as grade_season_bucket
+	  ,'OFF' as grade_side
+FROM AnalyticsWork.dbo.quant_grades_offense
+WHERE Snaps >= 50
+
+--select * from ##temp_quant_grades
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the pro and quant grades into one table
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_both_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_both_grades') IS NOT NULL
+	DROP TABLE ##temp_both_grades
+
+SELECT COALESCE(sm.nfl_player_id,qg.nfl_player_id) AS nfl_player_id
+      ,COALESCE(sm.season,qg.season) AS season
+	  ,CASE WHEN sm.grade_season IS NULL THEN 1 ELSE 0 END AS grade_from_model
+	  ,COALESCE(sm.grade_season,qg.grade_season) AS grade
+      ,CASE WHEN COALESCE(sm.grade_season,qg.grade_season) >= 93.5 THEN 8.0
+		    WHEN COALESCE(sm.grade_season,qg.grade_season) >= 78.5 THEN 7.0
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 69 THEN CASE WHEN age <= 26 THEN 6.9 ELSE 6.7 END
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 62 THEN 6.3
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 55 THEN CASE WHEN age <= 26 THEN 6.0 ELSE 6.1 END
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 51.5 THEN 5.9
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 48.5 THEN 5.8
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 46.5 THEN 5.7
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 45.5 THEN 5.6
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 44.5 THEN 5.4
+			WHEN COALESCE(sm.grade_season,qg.grade_season) >= 43.5 THEN 5.2
+			WHEN COALESCE(sm.grade_season,qg.grade_season) < 43.5 THEN 5.0
+			ELSE NULL
+	   END AS grade_value 
+INTO ##temp_both_grades
+FROM ##temp_quant_grades qg
+FULL JOIN ##temp_grades_scout_mean sm
+ON qg.nfl_player_id = sm.nfl_player_id
+AND qg.season = sm.season
+WHERE COALESCE(sm.season,qg.season) >= 2013
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the player grades to the transaction table
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_transactions_with_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..##temp_transactions_with_grades') IS NOT NULL
+	DROP TABLE ##temp_transactions_with_grades
+
+SELECT tr.*
+      ,CONCAT(last_name,', ',goes_by) AS player
+	  ,abbreviation AS position
+      ,grade
+	  ,grade_value
+INTO ##temp_transactions_with_grades
+FROM ##temp_sign_and_last_one_team_row tr
+LEFT JOIN ##temp_both_grades gr
+ON tr.nfl_player_id = gr.nfl_player_id
+AND tr.season = gr.season
+INNER JOIN BaneProductionAnalytics.dbo.players pl
+ON tr.nfl_player_id = pl.nfl_id
+INNER JOIN BaneProductionAnalytics.dbo.positions pos
+ON pl.position_id = pos.id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join in ELO rating from start to end of the time period he was on the team.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if ##temp_transactions_with_grades_elo, if it does drop it
+IF OBJECT_ID('tempdb..##temp_transactions_with_grades_elo') IS NOT NULL
+	DROP TABLE ##temp_transactions_with_grades_elo
+
+SELECT tg.*
+      ,esr.rating AS elo_start
+	  ,eer.rating AS elo_end
+--INTO ##temp_transactions_with_grades_elo
+FROM ##temp_transactions_with_grades tg
+LEFT JOIN [Analytics].[dbo].[analysis_elo_ratings_regular] esr
+       ON tg.nfl_player_id = esr.nfl_player_id
+	  AND tg.season = esr.season
+	  AND tg.week_start = esr.[week]
+LEFT JOIN [Analytics].[dbo].[analysis_elo_ratings_regular] eer
+       ON tg.nfl_player_id = eer.nfl_player_id
+	  AND tg.season = eer.season
+	  AND tg.week_last=eer.[week]
+
+
