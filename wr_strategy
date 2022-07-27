@@ -1,0 +1,764 @@
+
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+This program is for looking at WR groups in the nfl, to see if it is "better" to sign one high
+priced FA WR or a couple lower priced ones.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the actual and model pct of cap values for each player season.
+
+OUTPUT TABLES:
+#temp_pct_of_cap
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_pct_of_cap exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_pct_of_cap') IS NOT NULL
+	DROP TABLE #temp_pct_of_cap
+	
+	SELECT nfl_player_id
+		,season
+		,model
+		,salaries
+		,[value]
+		,[source]
+		,signing_type
+		,sign_date
+	INTO #temp_pct_of_cap
+	FROM [AnalyticsWork].[dbo].[rd2_salaries_for_modeling]
+	WHERE report_week = 17 
+		AND report_season = 2017
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a season playtime table.
+
+OUTPUT TABLES:
+#temp_players_playtime
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_players_playtime exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_players_playtime') IS NOT NULL
+	DROP TABLE #temp_players_playtime
+
+	SELECT pt.nfl_player_id
+		,pt.season
+		,pt.nfl_club_id
+		,SUM(pt.snap_count_offense) AS snap_count_offense
+		,SUM(pt.snap_count_offense_team) AS snap_count_offense_team
+		,SUM(snap_count_offense) / NULLIF(CAST(SUM(snap_count_offense_team) AS FLOAT),0) AS play_pct_offense
+	INTO #temp_players_playtime
+	FROM Analytics.dbo.stage_players_game_playtime pt
+	INNER JOIN BaneProductionAnalytics.dbo.pro_games pg
+		ON pt.nfl_game_key = pg.nfl_game_key
+	WHERE pg.season_type = 'REG'
+		AND pg.season >= 2012
+	GROUP BY pt.nfl_player_id
+		,pt.season
+		,pt.nfl_club_id
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get down to one row of draft board grade. Take a players draft
+board grade from as late in the process as available. You discount this by one
+grade level for rookies.
+
+OUTPUT TABLES:
+#temp_draft_board_grades_latest
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_grades exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades
+
+	SELECT player_id AS bane_player_id
+		,legacy_grade
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			ELSE NULL
+		END AS order_by
+	INTO #temp_draft_board_grades
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE legacy_grade != '' AND legacy_grade IS NOT NULL
+		AND player_id <> 64668
+
+
+-- Check if #temp_draft_board_grades_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_with_order
+
+	SELECT bane_player_id
+		,legacy_grade
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by) AS draft_board_grade_order
+	INTO #temp_draft_board_grades_with_order
+	FROM #temp_draft_board_grades
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_with_order
+*/
+
+-- Check if #temp_draft_board_grades_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_grades_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_grades_latest
+
+	SELECT bane_player_id
+		,legacy_grade
+	INTO #temp_draft_board_grades_latest
+	FROM #temp_draft_board_grades_with_order
+	WHERE draft_board_grade_order = 1
+
+/*
+SELECT *
+FROM #temp_draft_board_grades_latest
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Get down to one row of draft board position. Take a players draft
+board position from as late in the process as available. 
+
+OUTPUT TABLES:
+#temp_draft_board_positions_with_order
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_positions exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions
+
+	SELECT player_id AS bane_player_id
+		,position
+		,CASE WHEN UPPER(LTRIM(RTRIM([type]))) = 'PRE-DRAFT' THEN 1
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-APR' THEN 2
+			WHEN UPPER(LTRIM(RTRIM([type]))) = 'POST-FEB' THEN 3
+			ELSE NULL
+	END AS order_by
+	INTO #temp_draft_board_positions
+	FROM [BaneProductionAnalytics].[dbo].[draft_board_grades]
+	WHERE position != '' AND position IS NOT NULL
+		AND player_id <> 64668
+
+
+-- Check if #temp_draft_board_positions_with_order exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_with_order') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_with_order
+
+	SELECT bane_player_id
+		,position
+		,RANK() OVER (PARTITION BY bane_player_id ORDER BY order_by) AS draft_board_position_order
+	INTO #temp_draft_board_positions_with_order
+	FROM #temp_draft_board_positions
+
+/*
+SELECT *
+FROM #temp_draft_board_positions_with_order
+*/
+
+-- Check if #temp_draft_board_positions_latest exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_positions_latest') IS NOT NULL
+	DROP TABLE #temp_draft_board_positions_latest
+
+	SELECT *
+	INTO #temp_draft_board_positions_latest
+	FROM #temp_draft_board_positions_with_order
+	WHERE draft_board_position_order = 1
+
+/*
+SELECT DISTINCT position
+FROM #temp_draft_board_positions_latest
+*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join first year pro grade to draft board grade so you can find expected pro grade in 
+first season based on board grade and position.
+
+OUTPUT TABLES:
+#temp_draft_board_and_pro
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_draft_board_and_pro exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_draft_board_and_pro') IS NOT NULL
+	DROP TABLE #temp_draft_board_and_pro
+
+	SELECT db.bane_player_id
+		,dp.position
+		,legacy_grade
+		,CASE WHEN pg.grade_value IS NULL OR pg.grade_value <= 47.5 THEN 47.5 ELSE pg.grade_value END AS pro_grade
+	INTO #temp_draft_board_and_pro
+	FROM #temp_draft_board_grades_latest db
+	LEFT JOIN #temp_draft_board_positions_latest dp
+		ON db.bane_player_id = dp.bane_player_id
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades pg
+		ON db.bane_player_id = pg.bane_player_id
+		AND pg.player_season_in_league = 1
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the average rookie year pro grade by board grade and position.
+
+OUTPUT TABLES:
+#temp_rookie_expected_grade
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_rookie_expected_grade exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_rookie_expected_grade') IS NOT NULL
+	DROP TABLE #temp_rookie_expected_grade
+
+	SELECT position
+		,legacy_grade
+		,AVG(pro_grade) AS expected_pro_grade
+	--INTO #temp_rookie_expected_grade
+	FROM #temp_draft_board_and_pro
+	GROUP BY position
+		,legacy_grade
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join player info on to the play time table.  Add grades from that year and the year before, 
+same with cap info.
+
+OUTPUT TABLES:
+#temp_playtime_with_grade_buckets
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_playtime_with_grade_buckets exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_playtime_with_grade_buckets') IS NOT NULL
+	DROP TABLE #temp_playtime_with_grade_buckets
+
+	SELECT pl.id AS bane_player_id
+		,CONCAT(pl.last_name,', ',pl.goes_by) AS player
+		,ISNULL(position_blt,translation) AS position
+		,pt.nfl_club_id
+		,cl.code AS club
+		,pt.season
+		,snap_count_offense
+		,snap_count_offense_team
+		,play_pct_offense
+		,pcp.[value] AS pct_of_cap_previous
+		,pcc.[value] AS pct_of_cap_current
+		,CASE WHEN pl.nfl_entry_year = pt.season THEN CASE WHEN db.legacy_grade < 5.7  THEN 5.7 ELSE ISNULL(db.legacy_grade,5.7) END	
+			WHEN pgp.grade_bucket IS NULL THEN CASE WHEN pgp2.grade_bucket < 5.7 THEN 5.7 ELSE ISNULL(pgp2.grade_bucket,5.7) END 
+			ELSE CASE WHEN pgp.grade_bucket < 5.7 THEN 5.7 ELSE ISNULL(pgp.grade_bucket,5.7) END
+		END AS pro_grade_previous
+		,CASE WHEN pgc.grade_bucket < 5.7 THEN 5.7
+			ELSE ISNULL(pgc.grade_bucket,5.7)
+		END AS pro_grade_current
+	INTO #temp_playtime_with_grade_buckets
+	FROM #temp_players_playtime pt
+	INNER JOIN BaneProductionAnalytics.dbo.players pl
+		ON pt.nfl_player_id = pl.nfl_id
+		AND pl.is_deleted = 0
+	LEFT JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON pt.nfl_club_id = cl.nfl_club_id
+		AND cl.is_disabled = 0
+	LEFT JOIN #temp_pct_of_cap pcp
+		ON pt.nfl_player_id = pcp.nfl_player_id
+		AND pt.season = pcp.season + 1
+	LEFT JOIN #temp_pct_of_cap pcc
+		ON pt.nfl_player_id = pcc.nfl_player_id
+		AND pt.season = pcc.season
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgp
+		ON pt.nfl_player_id = pgp.nfl_player_id
+		AND pt.season = pgp.report_season + 1
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgc
+		ON pt.nfl_player_id = pgc.nfl_player_id
+		AND pt.season = pgc.report_season
+	LEFT JOIN Analytics.dbo.analysis_players_pro_grades	pgp2
+		ON pt.nfl_player_id =pgp2.nfl_player_id
+		AND pt.season = pgp2.report_season + 2
+	LEFT JOIN BaneProductionAnalytics.dbo.positions po
+		ON pl.position_id = po.id
+	LEFT JOIN Analytics.dbo.analysis_players_season_position_offense poff
+		ON pt.nfl_player_id = poff.nfl_player_id
+		AND pt.season = poff.season
+		AND poff.season_type_adjusted = 'REGPOST'
+	LEFT JOIN #temp_draft_board_grades_latest db
+		ON pl.id = db.bane_player_id
+	WHERE (position_blt IN ('QB','TE','WR') OR translation IN ('QB','TE','WR'))
+		AND translation NOT IN ('OT','OG','OC')
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Create a table with the team skill position snap counts for later weighted averages.
+
+*Do only pass plays?
+
+OUTPUT TABLES:
+#temp_position_snap_counts
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_position_snap_counts exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_position_snap_counts') IS NOT NULL
+	DROP TABLE #temp_position_snap_counts
+
+	SELECT nfl_club_id
+		,season
+		,SUM(CASE WHEN position = 'QB' THEN snap_count_offense ELSE 0 END) AS team_snaps_qb
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_previous = 8.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_qb_prev_80
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_previous = 7.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_qb_70
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_previous IN (6.9,6.7,6.5) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_qb_69
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_previous IN (6.4,6.3,6.2) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_qb_63
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_previous IN (6.1,6.0) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_qb_60
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_previous = 5.9 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_qb_59
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_previous = 5.8 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_qb_58
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_current = 8.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_qb_curr_80
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_current = 7.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_qb_70
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_current IN (6.9,6.7,6.5) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_qb_69
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_current IN (6.4,6.3,6.2) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_qb_63
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_current IN (6.1,6.0) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_qb_60
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_current = 5.9 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_qb_59
+		,SUM(CASE WHEN position = 'QB' AND pro_grade_current = 5.8 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_qb_58
+		,SUM(CASE WHEN position = 'WR' THEN snap_count_offense ELSE 0 END) AS team_snaps_wr
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_previous = 8.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_wr_prev_80
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_previous = 7.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wr_70
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_previous IN (6.9,6.7,6.5) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wr_69
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_previous IN (6.4,6.3,6.2) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wr_63
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_previous IN (6.1,6.0) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wr_60
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_previous = 5.9 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wr_59
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_previous = 5.8 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wr_58
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_current = 8.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_wr_curr_80
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_current = 7.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wr_70
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_current IN (6.9,6.7,6.5) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wr_69
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_current IN (6.4,6.3,6.2) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wr_63
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_current IN (6.1,6.0) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wr_60
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_current = 5.9 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wr_59
+		,SUM(CASE WHEN position = 'WR' AND pro_grade_current = 5.8 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wr_58
+		,SUM(CASE WHEN position IN ('WR','TE') THEN snap_count_offense ELSE 0 END) AS team_snaps_wrte
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_previous = 8.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_wrte_prev_80
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_previous = 7.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wrte_70
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_previous IN (6.9,6.7,6.5) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wrte_69
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_previous IN (6.4,6.3,6.2) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wrte_63
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_previous IN (6.1,6.0) THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wrte_60
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_previous = 5.9 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wrte_59
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_previous = 5.8 THEN snap_count_offense ELSE 0 END) AS team_snaps_prev_wrte_58
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_current = 8.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_wrte_curr_80
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_current = 7.0 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wrte_70
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_current IN (6.9,6.7,6.5) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wrte_69
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_current IN (6.4,6.3,6.2) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wrte_63
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_current IN (6.1,6.0) THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wrte_60
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_current = 5.9 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wrte_59
+		,SUM(CASE WHEN position IN ('WR','TE') AND pro_grade_current = 5.8 THEN snap_count_offense ELSE 0 END) AS team_snaps_curr_wrte_58
+	INTO #temp_position_snap_counts
+	FROM #temp_playtime_with_grade_buckets
+	GROUP BY nfl_club_id
+		,season
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Convert the grade buckets to values
+
+OUTPUT TABLES:
+#temp_playtime_with_grade_values
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_playtime_with_grade_values exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_playtime_with_grade_values') IS NOT NULL
+	DROP TABLE #temp_playtime_with_grade_values
+
+	SELECT gb.*
+		,CASE WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (8.0) THEN 100
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (7.0) THEN 92
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (6.9) THEN 82
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (6.7,6.5) THEN 71
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (6.4,6.3,6.2) THEN 64
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (6.1,6.0) THEN 58
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (5.9) THEN 53.5
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (5.8) THEN 50
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (5.7) THEN 47
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (5.6) THEN 45.5
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (5.4) THEN 43
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (5.2) THEN 41
+			WHEN CAST(pro_grade_previous AS NUMERIC (3,1)) IN (5.0) THEN 40
+			ELSE NULL
+		END AS pro_grade_previous_value 	
+		,CASE WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (8.0) THEN 100
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (7.0) THEN 92
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.9) THEN 82
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.7,6.5) THEN 71
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.4,6.3,6.2) THEN 64
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (6.1,6.0) THEN 58
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.9) THEN 53.5
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.8) THEN 50
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.7) THEN 47
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.6) THEN 45.5
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.4) THEN 43
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.2) THEN 41
+			WHEN CAST(pro_grade_current AS NUMERIC (3,1)) IN (5.0) THEN 40
+			ELSE NULL
+		END AS pro_grade_current_value  
+		,team_snaps_qb
+		,team_snaps_qb_prev_80 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_prev_80
+		,team_snaps_prev_qb_70 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_prev_70
+		,team_snaps_prev_qb_69 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_prev_69
+		,team_snaps_prev_qb_63 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_prev_63
+		,team_snaps_prev_qb_60 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_prev_60
+		,team_snaps_prev_qb_59 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_prev_59
+		,team_snaps_prev_qb_58 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_prev_58
+		,team_snaps_qb_curr_80 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_curr_80
+		,team_snaps_curr_qb_70 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_curr_70
+		,team_snaps_curr_qb_69 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_curr_69
+		,team_snaps_curr_qb_63 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_curr_63
+		,team_snaps_curr_qb_60 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_curr_60
+		,team_snaps_curr_qb_59 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_curr_59
+		,team_snaps_curr_qb_58 / CAST(team_snaps_qb AS FLOAT) AS snap_pct_qb_curr_58
+		,team_snaps_wr
+		,team_snaps_wr_prev_80 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_prev_80
+		,team_snaps_prev_wr_70 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_prev_70
+		,team_snaps_prev_wr_69 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_prev_69
+		,team_snaps_prev_wr_63 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_prev_63
+		,team_snaps_prev_wr_60 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_prev_60
+		,team_snaps_prev_wr_59 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_prev_59
+		,team_snaps_prev_wr_58 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_prev_58
+		,team_snaps_wr_curr_80 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_curr_80
+		,team_snaps_curr_wr_70 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_curr_70
+		,team_snaps_curr_wr_69 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_curr_69
+		,team_snaps_curr_wr_63 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_curr_63
+		,team_snaps_curr_wr_60 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_curr_60
+		,team_snaps_curr_wr_59 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_curr_59
+		,team_snaps_curr_wr_58 / CAST(team_snaps_wr AS FLOAT) AS snap_pct_wr_curr_58
+		,team_snaps_wrte
+		,team_snaps_wrte_prev_80 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_prev_80
+		,team_snaps_prev_wrte_70 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_prev_70
+		,team_snaps_prev_wrte_69 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_prev_69
+		,team_snaps_prev_wrte_63 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_prev_63
+		,team_snaps_prev_wrte_60 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_prev_60
+		,team_snaps_prev_wrte_59 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_prev_59
+		,team_snaps_prev_wrte_58 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_prev_58
+		,team_snaps_wrte_curr_80 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_curr_80
+		,team_snaps_curr_wrte_70 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_curr_70
+		,team_snaps_curr_wrte_69 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_curr_69
+		,team_snaps_curr_wrte_63 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_curr_63
+		,team_snaps_curr_wrte_60 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_curr_60
+		,team_snaps_curr_wrte_59 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_curr_59
+		,team_snaps_curr_wrte_58 / CAST(team_snaps_wrte AS FLOAT) AS snap_pct_wrte_curr_58
+	INTO #temp_playtime_with_grade_values
+	FROM #temp_playtime_with_grade_buckets gb
+	LEFT JOIN #temp_position_snap_counts sc
+		ON gb.nfl_club_id = sc.nfl_club_id
+		AND gb.season = sc.season
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Multiply the snaps by the grade so you can get a weighted average.
+
+OUTPUT TABLES:
+#temp_multiply_grade_snaps
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_multiply_grade_snaps exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_multiply_grade_snaps') IS NOT NULL
+	DROP TABLE #temp_multiply_grade_snaps
+
+	SELECT *
+		,CASE WHEN position = 'WR' THEN pro_grade_previous_value * (snap_count_offense / CAST(team_snaps_wr AS FLOAT)) ELSE NULL END AS previous_value_weighted_wr 
+		,CASE WHEN position = 'WR' THEN pro_grade_current_value * (snap_count_offense / CAST(team_snaps_wr AS FLOAT)) ELSE NULL END AS current_value_weighted_wr 
+		,CASE WHEN position IN ('WR','TE') THEN pro_grade_previous_value * (snap_count_offense / CAST(team_snaps_wrte AS FLOAT)) ELSE NULL END AS previous_value_weighted_wrte
+		,CASE WHEN position IN ('WR','TE') THEN pro_grade_current_value * (snap_count_offense / CAST(team_snaps_wrte AS FLOAT)) ELSE NULL END AS current_value_weighted_wrte
+		,CASE WHEN position = 'QB' THEN pro_grade_previous_value * (snap_count_offense / CAST(team_snaps_qb AS FLOAT)) ELSE NULL END AS previous_value_weighted_qb
+		,CASE WHEN position = 'QB' THEN pro_grade_current_value * (snap_count_offense / CAST(team_snaps_qb AS FLOAT)) ELSE NULL END AS current_value_weighted_qb
+	INTO #temp_multiply_grade_snaps
+	FROM #temp_playtime_with_grade_values
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the average and weighted average by team and position. Also find grade counts.
+
+OUTPUT TABLES:
+#temp_wr_makeup
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_wr_makeup exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_wr_makeup') IS NOT NULL
+	DROP TABLE #temp_wr_makeup
+
+	SELECT nfl_club_id
+		,club
+		,season
+		/*,team_snaps_qb
+		,snap_pct_qb_prev_80
+		,snap_pct_qb_prev_70
+		,snap_pct_qb_prev_69
+		,snap_pct_qb_prev_63
+		,snap_pct_qb_prev_60
+		,snap_pct_qb_prev_59
+		,snap_pct_qb_prev_58
+		,snap_pct_qb_curr_80
+		,snap_pct_qb_curr_70
+		,snap_pct_qb_curr_69
+		,snap_pct_qb_curr_63
+		,snap_pct_qb_curr_60
+		,snap_pct_qb_curr_59
+		,snap_pct_qb_curr_58
+		,team_snaps_wr
+		,snap_pct_wr_prev_80
+		,snap_pct_wr_prev_70
+		,snap_pct_wr_prev_69
+		,snap_pct_wr_prev_63
+		,snap_pct_wr_prev_60
+		,snap_pct_wr_prev_59
+		,snap_pct_wr_prev_58
+		,snap_pct_wr_curr_80
+		,snap_pct_wr_curr_70
+		,snap_pct_wr_curr_69
+		,snap_pct_wr_curr_63
+		,snap_pct_wr_curr_60
+		,snap_pct_wr_curr_59
+		,snap_pct_wr_curr_58
+		,team_snaps_wrte
+		,snap_pct_wrte_prev_80
+		,snap_pct_wrte_prev_70
+		,snap_pct_wrte_prev_69
+		,snap_pct_wrte_prev_63
+		,snap_pct_wrte_prev_60
+		,snap_pct_wrte_prev_59
+		,snap_pct_wrte_prev_58
+		,snap_pct_wrte_curr_80
+		,snap_pct_wrte_curr_70
+		,snap_pct_wrte_curr_69
+		,snap_pct_wrte_curr_63
+		,snap_pct_wrte_curr_60
+		,snap_pct_wrte_curr_59
+		,snap_pct_wrte_curr_58*
+		,SUM(previous_value_weighted_wr) AS previous_weighted_avg_wr
+		,SUM(previous_value_weighted_wrte) AS previous_weighted_avg_wrte*/
+		/*,SUM(current_value_weighted_wr) AS current_weighted_avg_wr
+		,SUM(current_value_weighted_wrte) AS current_weighted_avg_wrte*/
+		,SUM(previous_value_weighted_qb) AS previous_weighted_avg_qb
+		,SUM(current_value_weighted_qb) AS current_weighted_avg_qb
+		,SUM(CASE WHEN pro_grade_previous = 8.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_80_previous_wr
+		,SUM(CASE WHEN pro_grade_previous = 7.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_70_previous_wr
+		,SUM(CASE WHEN pro_grade_previous IN (6.9,6.7,6.5) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_69_previous_wr
+		,SUM(CASE WHEN pro_grade_previous IN (6.4,6.3,6.2) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_63_previous_wr
+		,SUM(CASE WHEN pro_grade_previous IN (6.1,6.0) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_60_previous_wr
+		,SUM(CASE WHEN pro_grade_previous IN (5.9) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_59_previous_wr
+		,SUM(CASE WHEN pro_grade_previous IN (5.8) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_58_previous_wr
+		,SUM(CASE WHEN pro_grade_previous >= 8.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_80up_previous_wr
+		,SUM(CASE WHEN pro_grade_previous >= 7.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_70up_previous_wr
+		,SUM(CASE WHEN pro_grade_previous >= 6.5 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_69up_previous_wr
+		,SUM(CASE WHEN pro_grade_previous >= 6.2 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_63up_previous_wr
+		,SUM(CASE WHEN pro_grade_previous >= 6.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_60up_previous_wr
+		,SUM(CASE WHEN pro_grade_previous >= 5.9 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_59up_previous_wr
+		,SUM(CASE WHEN pro_grade_previous >= 5.8 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_58up_previous_wr
+		,SUM(CASE WHEN pro_grade_current = 8.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_80_current_wr
+		,SUM(CASE WHEN pro_grade_current = 7.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_70_current_wr
+		,SUM(CASE WHEN pro_grade_current IN (6.9,6.7,6.5) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_69_current_wr
+		,SUM(CASE WHEN pro_grade_current IN (6.4,6.3,6.2) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_63_current_wr
+		,SUM(CASE WHEN pro_grade_current IN (6.1,6.0) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_60_current_wr
+		,SUM(CASE WHEN pro_grade_current IN (5.9) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_59_current_wr
+		,SUM(CASE WHEN pro_grade_current IN (5.8) AND position IN ('WR') THEN 1 ELSE 0 END) AS count_58_current_wr
+		,SUM(CASE WHEN pro_grade_current >= 8.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_80up_current_wr
+		,SUM(CASE WHEN pro_grade_current >= 7.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_70up_current_wr
+		,SUM(CASE WHEN pro_grade_current >= 6.5 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_69up_current_wr
+		,SUM(CASE WHEN pro_grade_current >= 6.2 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_63up_current_wr
+		,SUM(CASE WHEN pro_grade_current >= 6.0 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_60up_current_wr
+		,SUM(CASE WHEN pro_grade_current >= 5.9 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_59up_current_wr
+		,SUM(CASE WHEN pro_grade_current >= 5.8 AND position IN ('WR') THEN 1 ELSE 0 END) AS count_58up_current_wr
+		,SUM(CASE WHEN pro_grade_previous = 8.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_80_previous_te
+		,SUM(CASE WHEN pro_grade_previous = 7.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_70_previous_te
+		,SUM(CASE WHEN pro_grade_previous IN (6.9,6.7,6.5) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_69_previous_te
+		,SUM(CASE WHEN pro_grade_previous IN (6.4,6.3,6.2) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_63_previous_te
+		,SUM(CASE WHEN pro_grade_previous IN (6.1,6.0) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_60_previous_te
+		,SUM(CASE WHEN pro_grade_previous IN (5.9) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_59_previous_te
+		,SUM(CASE WHEN pro_grade_previous IN (5.8) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_58_previous_te
+		,SUM(CASE WHEN pro_grade_previous >= 8.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_80up_previous_te
+		,SUM(CASE WHEN pro_grade_previous >= 7.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_70up_previous_te
+		,SUM(CASE WHEN pro_grade_previous >= 6.5 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_69up_previous_te
+		,SUM(CASE WHEN pro_grade_previous >= 6.2 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_63up_previous_te
+		,SUM(CASE WHEN pro_grade_previous >= 6.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_60up_previous_te
+		,SUM(CASE WHEN pro_grade_previous >= 5.9 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_59up_previous_te
+		,SUM(CASE WHEN pro_grade_previous >= 5.8 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_58up_previous_te
+		,SUM(CASE WHEN pro_grade_current = 8.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_80_current_te
+		,SUM(CASE WHEN pro_grade_current = 7.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_70_current_te
+		,SUM(CASE WHEN pro_grade_current IN (6.9,6.7,6.5) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_69_current_te
+		,SUM(CASE WHEN pro_grade_current IN (6.4,6.3,6.2) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_63_current_te
+		,SUM(CASE WHEN pro_grade_current IN (6.1,6.0) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_60_current_te
+		,SUM(CASE WHEN pro_grade_current IN (5.9) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_59_current_te
+		,SUM(CASE WHEN pro_grade_current IN (5.8) AND position IN ('TE') THEN 1 ELSE 0 END) AS count_58_current_te
+		,SUM(CASE WHEN pro_grade_current >= 8.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_80up_current_te
+		,SUM(CASE WHEN pro_grade_current >= 7.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_70up_current_te
+		,SUM(CASE WHEN pro_grade_current >= 6.5 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_69up_current_te
+		,SUM(CASE WHEN pro_grade_current >= 6.2 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_63up_current_te
+		,SUM(CASE WHEN pro_grade_current >= 6.0 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_60up_current_te
+		,SUM(CASE WHEN pro_grade_current >= 5.9 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_59up_current_te
+		,SUM(CASE WHEN pro_grade_current >= 5.8 AND position IN ('TE') THEN 1 ELSE 0 END) AS count_58up_current_te
+	INTO #temp_wr_makeup
+	FROM #temp_multiply_grade_snaps
+	GROUP BY nfl_club_id
+		,club
+		,season
+		/*,team_snaps_qb
+		,snap_pct_qb_prev_80
+		,snap_pct_qb_prev_70
+		,snap_pct_qb_prev_69
+		,snap_pct_qb_prev_63
+		,snap_pct_qb_prev_60
+		,snap_pct_qb_prev_59
+		,snap_pct_qb_prev_58
+		,snap_pct_qb_curr_80
+		,snap_pct_qb_curr_70
+		,snap_pct_qb_curr_69
+		,snap_pct_qb_curr_63
+		,snap_pct_qb_curr_60
+		,snap_pct_qb_curr_59
+		,snap_pct_qb_curr_58
+		,team_snaps_wr
+		,snap_pct_wr_prev_80
+		,snap_pct_wr_prev_70
+		,snap_pct_wr_prev_69
+		,snap_pct_wr_prev_63
+		,snap_pct_wr_prev_60
+		,snap_pct_wr_prev_59
+		,snap_pct_wr_prev_58
+		,snap_pct_wr_curr_80
+		,snap_pct_wr_curr_70
+		,snap_pct_wr_curr_69
+		,snap_pct_wr_curr_63
+		,snap_pct_wr_curr_60
+		,snap_pct_wr_curr_59
+		,snap_pct_wr_curr_58
+		,team_snaps_wrte
+		,snap_pct_wrte_prev_80
+		,snap_pct_wrte_prev_70
+		,snap_pct_wrte_prev_69
+		,snap_pct_wrte_prev_63
+		,snap_pct_wrte_prev_60
+		,snap_pct_wrte_prev_59
+		,snap_pct_wrte_prev_58
+		,snap_pct_wrte_curr_80
+		,snap_pct_wrte_curr_70
+		,snap_pct_wrte_curr_69
+		,snap_pct_wrte_curr_63
+		,snap_pct_wrte_curr_60
+		,snap_pct_wrte_curr_59
+		,snap_pct_wrte_curr_58*/
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Find the team offensive effectiveness metrics.
+
+OUTPUT TABLES:
+#temp_yards
+#temp_expected_points
+#temp_drives
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+-- Check if #temp_yards exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_yards') IS NOT NULL
+	DROP TABLE #temp_yards
+
+	SELECT season
+		,team
+		,cl.nfl_club_id
+		,ypp AS yards_per_play
+		,rush_ypa AS yards_per_rush
+		,pass_ypa AS yards_per_pass
+		,pass_nypa AS net_yards_per_pass
+		,pass_anypa AS adj_net_yards_per_pass
+	INTO #temp_yards
+	FROM [AnalyticsWork].[dbo].[rd_seasonfact_teamstats] ts
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON CASE WHEN ts.team IN ('STL','SL','LA') THEN 'LA'
+				WHEN ts.team IN ('SD','LAC') THEN 'LAC'
+				 ELSE ts.team END = cl.code
+	WHERE Season >= 2012
+		AND UPPER(Season_Type) = 'REG'
+		AND offdef = 'off'
+
+
+-- Check if #temp_expected_points exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_expected_points') IS NOT NULL
+	DROP TABLE #temp_expected_points
+
+	SELECT rp.*
+		,nfl_club_id
+	INTO #temp_expected_points
+	FROM [AnalyticsWork].[dbo].[rd4_run_pass_effectiveness] rp
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON CASE WHEN rp.team IN ('STL','SL','LA') THEN 'LA'
+				WHEN rp.team IN ('SD','LAC') THEN 'LAC'
+				 ELSE rp.team END = cl.code
+	WHERE offdef = 'off' 
+		AND  opers = 'all'
+		AND dpers = 'all'
+		AND run_pct_sit = 'all'
+		AND seasontype = 'reg'
+		AND team <> 'nfl'
+		AND season >= 2012
+
+
+-- Check if #temp_drives exists, if it does drop it
+IF OBJECT_ID('tempdb..#temp_drives') IS NOT NULL
+	DROP TABLE #temp_drives
+
+	SELECT do.*
+		,nfl_club_id
+	INTO #temp_drives
+	FROM [AnalyticsWork].[dbo].[teamratings_yards_per_drive_overall] do
+	INNER JOIN BaneProductionAnalytics.dbo.clubs cl
+		ON CASE WHEN do.team IN ('STL','SL','LA') THEN 'LA'
+				WHEN do.team IN ('SD','LAC') THEN 'LAC'
+				 ELSE do.team END = cl.code
+	WHERE season >= 2012
+
+
+/*---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Join the team offense effectiveness to the wr makeup table
+
+OUTPUT TABLES:
+Analytics.dbo.work_r_input_fa_wr_strategy
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+--TRUNCATE TABLE Analytics.dbo.work_r_input_fa_wr_strategy
+
+--INSERT INTO Analytics.dbo.work_r_input_fa_wr_strategy
+	SELECT wr.*
+		,yards_per_play
+		,yards_per_rush
+		,yards_per_pass
+		,net_yards_per_pass
+		,adj_net_yards_per_pass
+		,xp_pass
+		,xp_total
+		,yards_per_stop_off
+		,yps_adj_off
+	FROM #temp_wr_makeup wr
+	INNER JOIN #temp_yards ya
+		ON wr.nfl_club_id = ya.nfl_club_id
+		AND wr.season = ya.Season
+	INNER JOIN #temp_expected_points xp
+		ON wr.nfl_club_id = xp.nfl_club_id
+		AND wr.season = xp.Season
+	INNER JOIN #temp_drives dr
+		ON wr.nfl_club_id = dr.nfl_club_id
+		AND wr.season = dr.Season
